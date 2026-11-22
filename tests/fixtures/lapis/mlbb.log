@@ -1,0 +1,83 @@
+com.mobile.legends: on for device 0x7ea1ea13f0 (1)
+ 0x7ea1ea13f0 asks vkCreateRenderPass
+ 0x7ea1ea13f0 asks vkDestroyRenderPass
+ 0x7ea1ea13f0 asks vkCmdBeginRenderPass
+ 0x7ea1ea13f0 asks vkCmdEndRenderPass
+ 0x7ea1ea13f0 asks vkCreateRenderPass2
+ 0x7ea1ea13f0 asks vkCmdBeginRenderPass2
+ 0x7ea1ea13f0 asks vkCmdEndRenderPass2
+ 0x7ea1ea13f0 asks vkCmdBeginRendering
+ 0x7ea1ea13f0 asks vkCmdEndRendering
+ 0x7ea1ea13f0 asks vkCreateRenderPass
+ 0x7ea1ea13f0 asks vkDestroyRenderPass
+ 0x7ea1ea13f0 asks vkCmdBeginRenderPass
+ 0x7ea1ea13f0 asks vkCmdEndRenderPass
+ 0x7ea1ea13f0 asks vkCreateRenderPass2KHR
+ 0x7ea1ea13f0 asks vkCreateRenderPass
+ 0x7ea1ea13f0 asks vkDestroyRenderPass
+ 0x7ea1ea13f0 asks vkCmdBeginRenderPass
+ 0x7ea1ea13f0 asks vkCmdEndRenderPass
+ 0x7ea1ea13f0 asks vkCreateRenderPass2KHR
+com.mobile.legends:UnityKillsMe: on for device 0x7ea1eabf50 (1)
+ 0x7ea1eabf50 asks vkCreateRenderPass
+ 0x7ea1eabf50 asks vkDestroyRenderPass
+ 0x7ea1eabf50 asks vkCmdBeginRenderPass
+ 0x7ea1eabf50 asks vkCmdEndRenderPass
+ 0x7ea1eabf50 asks vkCreateRenderPass2
+ 0x7ea1eabf50 asks vkCmdBeginRenderPass2
+ 0x7ea1eabf50 asks vkCmdEndRenderPass2
+ 0x7ea1eabf50 asks vkCmdBeginRendering
+ 0x7ea1eabf50 asks vkCmdEndRendering
+ 0x7ea1eabf50 asks vkCreateRenderPass
+ 0x7ea1eabf50 asks vkDestroyRenderPass
+ 0x7ea1eabf50 asks vkCmdBeginRenderPass
+ 0x7ea1eabf50 asks vkCmdEndRenderPass
+ 0x7ea1eabf50 asks vkCreateRenderPass2KHR
+ 0x7ea1eabf50 asks vkCreateRenderPass
+ 0x7ea1eabf50 asks vkDestroyRenderPass
+ 0x7ea1eabf50 asks vkCmdBeginRenderPass
+ 0x7ea1eabf50 asks vkCmdEndRenderPass
+ 0x7ea1eabf50 asks vkCreateRenderPass2KHR
+ 0x0 asks vkCmdBeginConditionalRenderingEXT
+ 0x0 asks vkCmdEndConditionalRenderingEXT
+ 0x0 asks vkCmdBeginRenderPass2KHR
+ 0x0 asks vkCmdEndRenderPass2KHR
+ 0x0 asks vkCreateRenderPass2KHR
+ 0x0 asks vkCmdBeginRenderingKHR
+ 0x0 asks vkCmdEndRenderingKHR
+ 0x0 asks vkCmdSetRenderingAttachmentLocationsKHR
+ 0x0 asks vkCmdSetRenderingInputAttachmentIndicesKHR
+ 0x0 asks vkGetRenderingAreaGranularityKHR
+ 0x0 asks vkGetDynamicRenderingTilePropertiesQCOM
+com.mobile.legends:UnityKillsMe: on for device 0x7ea1f774d0 (2)
+ 0x7ea1f774d0 asks vkCreateRenderPass
+ 0x7ea1f774d0 asks vkDestroyRenderPass
+ 0x7ea1f774d0 asks vkCmdBeginRenderPass
+ 0x7ea1f774d0 asks vkCmdEndRenderPass
+ 0x7ea1f774d0 asks vkCmdBeginRenderPass
+ 0x7ea1f774d0 asks vkCmdEndRenderPass
+ 0x7ea1f774d0 asks vkCreateRenderPass
+ 0x7ea1f774d0 asks vkDestroyRenderPass
+ 0x7ea1f774d0 asks vkCmdBeginRenderPass2KHR
+ 0x7ea1f774d0 asks vkCmdEndRenderPass2KHR
+ 0x7ea1f774d0 asks vkCreateRenderPass2KHR
+ 0x7ea1f774d0 asks vkCmdBeginRenderingKHR
+ 0x7ea1f774d0 asks vkCmdEndRenderingKHR
+ 0x7ea1f774d0 asks vkCmdSetRenderingAttachmentLocationsKHR
+ 0x7ea1f774d0 asks vkCmdSetRenderingInputAttachmentIndicesKHR
+ 0x7ea1f774d0 asks vkGetRenderingAreaGranularityKHR
+ device 0x7ea1ea13f0 gone
+ shot 1
+com.mobile.legends:UnityKillsMe shot 1 frame 0: 3 events; calls so far rp 15057 rp2 0 rendering 0 draw 1995397 submit 14613 submit2 0 execute 0
+  projections: 2 distinct in 122 of 122 MB mapped, 105.7 ms
+  proj x2 col fovY=30.0 aspect=2.167 jitter=(0.00000,0.00000) a=-1.002403 b=-0.600721 w=-1 | reversed: near=249.9981 far=0.6 | forward: near=0.5993 far=250.0 | mem type 6
+  proj x1 col fovY=15.0 aspect=2.167 jitter=(0.00000,0.00000) a=-1.000002 b=-0.020000 w=-1 | reversed: near=10485.7705 far=0.0 | forward: near=0.0200 far=10485.8 | mem type 6
+  submit q7430
+  dispatch x6 |
+  pass 0 rp 908x1968 draws=129 ztest=129 zwrite=42 | C #0 RGBA8 clear/STORE>present | D #128 D24S8 clear/dc>ds_att clear=1.000 | R #2698 fmt1000066007 2048x2048 #2640 fmt1000066007 1024x1024 #2680 fmt1000066007 1024x1024 #2582 fmt1000066007 1024x1024 +115
+  image #128 D24S8 908x1968 usage=xsrc|xdst|SAMPLED|ds mem=0
+com.mobile.legends:UnityKillsMe shot 1 frame 1: 3 events; calls so far rp 15058 rp2 0 rendering 0 draw 1995526 submit 14614 submit2 0 execute 0
+  submit q7430
+  dispatch x6 |
+  pass 0 rp 908x1968 draws=129 ztest=129 zwrite=42 | C #0 RGBA8 clear/STORE>present | D #128 D24S8 clear/dc>ds_att clear=1.000 | R #2698 fmt1000066007 2048x2048 #2640 fmt1000066007 1024x1024 #2680 fmt1000066007 1024x1024 #2582 fmt1000066007 1024x1024 +115
+  image #128 D24S8 908x1968 usage=xsrc|xdst|SAMPLED|ds mem=0

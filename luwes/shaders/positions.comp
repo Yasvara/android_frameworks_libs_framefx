@@ -1,0 +1,70 @@
+// SPDX-FileCopyrightText: IRedDragonICY
+// SPDX-License-Identifier: LicenseRef-IRedDragonICY-NC-1.0
+//
+// The game's clip positions, captured from its own vertex shaders (src/rays.cpp), as points of
+// the scene the rays hit: world around this frame's camera, three floats a vertex, each draw in
+// its own tree's points. A draw whose tree is kept is only compared with what that tree holds,
+// and flagged where it moved.
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Captured { vec4 clip[]; };
+layout(set = 0, binding = 1, std430) buffer Points { float xyz[]; };
+// first: the draw's first vertex among the frame's; count; captured: its first in the ring;
+// point: its first float in Points. offset: the camera its points are around, less this frame's;
+// w 2 write, 1 compare then write, 0 compare. uv: x its first vertex in Coordinates (~0 none),
+// y vec4s a captured vertex takes, z the coordinate's first component in the vec4 after its
+// position.
+struct Draw {
+    uvec4 range;
+    vec4 offset;
+    uvec4 uv;
+};
+layout(set = 0, binding = 2, std430) readonly buffer Draws { Draw draws[]; };
+layout(set = 0, binding = 3, std430) buffer Moved { uint moved[]; };  // 1 moved, 2 moved far
+// Where an alpha-tested draw's texture is sampled, per vertex, beside its points.
+layout(set = 0, binding = 4, std430) writeonly buffer Coordinates { vec2 uvs[]; };
+// The frame's top-level instances (VkAccelerationStructureInstanceKHR, 16 words each), the
+// drawn ones first in the draws' order: word 12 holds the mask in its top byte.
+layout(set = 0, binding = 5, std430) buffer Instances { uint instances[]; };
+// inverse: clip to camera-relative world. count: x vertices, y draws.
+layout(push_constant) uniform Push { mat4 inverse; uvec4 count; } push;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= push.count.x) return;
+    // The draw this vertex is of: the last whose first is at or before it.
+    uint lo = 0u;
+    uint hi = push.count.y - 1u;
+    while (lo < hi) {
+        uint mid = (lo + hi + 1u) >> 1;
+        if (draws[mid].range.x <= i) lo = mid; else hi = mid - 1u;
+    }
+    Draw d = draws[lo];
+    uint k = i - d.range.x;
+    uint at = d.range.z + k * d.uv.y;
+    vec4 h = push.inverse * clip[at];
+    // A vertex on the camera plane has no point: NaN takes its triangle out of the tree.
+    vec3 p = abs(h.w) > 1e-30 ? h.xyz / h.w : vec3(uintBitsToFloat(0x7fc00000u));
+    uint o = d.range.w + k * 3u;
+    if (d.offset.w < 1.5) {
+        vec3 kept = vec3(xyz[o], xyz[o + 1u], xyz[o + 2u]) + d.offset.xyz;
+        // Further than the frame's jitter and float precision move a still point; far, another
+        // mesh drawn under the same key.
+        float gap = distance(p, kept);
+        float reach = length(p);
+        uint level = gap > 0.05 * reach + 0.05 ? 2u : gap > 0.002 * reach + 0.002 ? 1u : 0u;
+        if (level > moved[lo]) atomicMax(moved[lo], level);
+        // A kept tree far from its draw's points holds another mesh (draws alike reordered as
+        // the game culls): out of this frame's rays, not a shadow where nothing stands.
+        if (level == 2u && d.offset.w < 0.5) atomicAnd(instances[lo * 16u + 12u], 0x00ffffffu);
+    }
+    if (d.offset.w > 0.5) {
+        xyz[o] = p.x;
+        xyz[o + 1u] = p.y;
+        xyz[o + 2u] = p.z;
+        if (d.uv.x != 0xffffffffu) {
+            vec4 v = clip[at + 1u];
+            uvs[d.uv.x + k] = d.uv.z == 0u ? v.xy : d.uv.z == 1u ? v.yz : v.zw;
+        }
+    }
+}

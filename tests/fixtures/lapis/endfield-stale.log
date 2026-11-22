@@ -1,0 +1,59 @@
+com.gryphline.endfield.gp shot 2 frame 2: 74 events; calls so far rp 2767 rp2 0 rendering 0 draw 13125 submit 375 submit2 0 execute 0
+  submit qba70
+  pass 0 rp 256x64 draws=1 ztest=1 zwrite=0 | C #295 R11G11B10F dc/STORE>color
+  pass 1 rp 32x32 draws=1 ztest=1 zwrite=0 | C #296 R11G11B10F dc/STORE>color | R #295 R11G11B10F 256x64* #37 RGBA8_SRGB 4x4 #38 RGBA8_SRGB 4x4
+  pass 2 rp 128x128 draws=1 ztest=1 zwrite=0 | C #294 R11G11B10F dc/STORE>color | R #295 R11G11B10F 256x64* #296 R11G11B10F 32x32*
+  dispatch x2 |
+  dispatch x2 |
+  dispatch x1 | #37 RGBA8_SRGB 4x4 #395 RGBA8_SRGB 1x1
+  layout #472 shader_ro>ds_att
+  pass 3 rp 2244x1036 sub5 draws=21 ztest=21 zwrite=0 | C #478 R11G11B10F dc/STORE>color C #477 RGB10A2 clear/STORE>color C #476 RGBA8 dc/dc>shader_ro C #475 RGBA8_SRGB dc/dc>shader_ro | D #472 D24S8 clear/STORE>ds_att clear=0.000 s:STORE d-as-input | R #37 RGBA8_SRGB 4x4 #38 RGBA8_SRGB 4x4 #53 RGBA8_SRGB 16x16 #72 +18
+    draws TTTTTTTTTtttttttttttt
+  layout #472 ds_att>shader_ro
+  layout #474 shader_ro>color
+  pass 4 rp 2244x1036 draws=1 ztest=1 zwrite=0 | C #474 R32F dc/STORE>color | R #472 D24S8 2244x1036* #37 RGBA8_SRGB 4x4 #38 RGBA8_SRGB 4x4
+  layout #474 color>shader_ro
+  layout #472 shader_ro>ds_att
+  pass 5 rp 2244x1036 draws=5 ztest=5 zwrite=2 | C #471 R11G11B10F dc/STORE>color C #477 RGB10A2 load/STORE>color | D #472 D24S8 load/STORE>ds_att s:STORE | R #474 R32F 2244x1036* #478 R11G11B10F 2244x1036* #37 RGBA8_SRGB 4x4 #38 RGBA8_SRGB 4x4 #40 #47 RGBA8_SRGB 4x4 +23
+  layout #472 ds_att>shader_ro
+  pass 6 rp 2244x1036 draws=1 ztest=1 zwrite=0 | C #470 RGBA8 dc/STORE>color | D #473 D24S8 clear/dc>ds_att clear=0.000 | R #471 R11G11B10F 2244x1036* #37 RGBA8_SRGB 4x4 #38 RGBA8_SRGB 4x4 #40 #52 +13
+  pass 7 rp 2244x1036 draws=1 ztest=1 zwrite=1 | C #469 RG16F dc/STORE>color | R #471 R11G11B10F 2244x1036* #472 D24S8 2244x1036* #477 RGB10A2 2244x1036* #37 RGBA8_SRGB 4x4 #38 RGBA8_SRGB 4x4 #40 #52 +14
+  pass 8 rp 2244x1036 draws=1 ztest=0 zwrite=0 | C #486 fmt103 clear/STORE>color C #494 R32F clear/STORE>color | R #469 RG16F 2244x1036* #470 RGBA8 2244x1036* #471 R11G11B10F 2244x1036* #472 D24S8 2244x1036* #477 RGB10A2 2244x1036* #37 RGBA8_SRGB 4x4 #38 RGBA8_SRGB 4x4 #40 #52 +14
+  layout #494 color>shader_ro
+  dispatch x1 | #483 R32UI 8x1
+  dispatch x1 | #470 RGBA8 2244x1036* #486 fmt103 2244x1036* #494 R32F 2244x1036* #482 RGBA8 1x1 #483 R32UI 8x1 #503 RGBA8 1122x518 #519 RG16F 2244x1036 +2
+  dispatch x1 | #470 RGBA8 2244x1036* #486 fmt103 2244x1036* #494 R32F 2244x1036* #483 R32UI 8x1 #485 R32UI 2244x1036
+  dispatch x1 | #483 R32UI 8x1 #484 R32UI 1122x518 #519 RG16F 2244x1036 #520 RGBA8 2244x1036 +1
+  pass 9 rp 2244x1036 draws=2 ztest=2 zwrite=2 | C #499 RGBA8 clear/STORE>color | D #500 D24S8 clear/dc>ds_att clear=0.000 | R #470 RGBA8 2244x1036* #471 R11G11B10F 2244x1036* #472 D24S8 2244x1036* #477 RGB10A2 2244x1036* #486 fmt103 2244x1036* #494 R32F 2244x1036* #37 RGBA8_SRGB 4x4 #38 RGBA8_SRGB 4x4 #40 #52 +14
+  dispatch x1 | #470 RGBA8 2244x1036* #483 R32UI 8x1 #484 R32UI 1122x518 #485 R32UI 2244x1036 #501 R32UI 141x65
+  pass 10 rp 141x65 draws=1 ztest=0 zwrite=0 | C #502 R16F clear/STORE>color | R #471 R11G11B10F 2244x1036* #472 D24S8 2244x1036* #477 RGB10A2 2244x1036* #494 R32F 2244x1036* #37 RGBA8_SRGB 4x4 #38 RGBA8_SRGB 4x4 #40 #52 +15
+  layout #502 color>shader_ro
+  pass 11 rp 2244x1036 draws=1 ztest=0 zwrite=0 | C #510 RGBA8 clear/STORE>color | R #470 RGBA8 2244x1036* #471 R11G11B10F 2244x1036* #472 D24S8 2244x1036* #477 RGB10A2 2244x1036* #499 RGBA8 2244x1036* #502 R16F 141x65* #37 RGBA8_SRGB 4x4 #38 RGBA8_SRGB 4x4 #40 #52 +16
+  pass 12 rp 2244x1036 draws=1 ztest=0 zwrite=0 | C #522 RGBA8 clear/STORE>color | R #471 R11G11B10F 2244x1036* #472 D24S8 2244x1036* #477 RGB10A2 2244x1036* #510 RGBA8 2244x1036* #37 RGBA8_SRGB 4x4 #38 RGBA8_SRGB 4x4 #40 #52 +16
+  pass 13 rp 2244x1036 draws=0 ztest=0 zwrite=0 | C #522 RGBA8 load/STORE>color | D #473 D24S8 clear/dc>ds_att clear=0.000
+  pass 14 rp 1080x2338 draws=10 ztest=10 zwrite=0 | C #0 RGBA8 dc/STORE>color | D #114 D24S8 clear/dc>ds_att clear=0.000 | R #472 D24S8 2244x1036* #477 RGB10A2 2244x1036* #522 RGBA8 2244x1036* #37 RGBA8_SRGB 4x4 #38 RGBA8_SRGB 4x4 #40 #47 RGBA8_SRGB 4x4 +18
+    draws aAAAAAAAAA
+  pass 15 rp 2244x1036 draws=1 ztest=1 zwrite=0 | C #520 RGBA8 dc/STORE>color | D #473 D24S8 clear/dc>ds_att clear=0.000 | R #470 RGBA8 2244x1036* #37 RGBA8_SRGB 4x4 #132 R8 1024x1024 #316 R11G11B10F 1870x864
+  pass 16 rp 1080x2338 draws=10 ztest=10 zwrite=0 | C #518 RGBA8 dc/STORE>color | D #114 D24S8 clear/dc>ds_att clear=0.000 | R #470 RGBA8 2244x1036* #520 RGBA8 2244x1036* #37 RGBA8_SRGB 4x4 #38 RGBA8_SRGB 4x4 #40 #47 RGBA8_SRGB 4x4 +17
+    draws aAAAAAAAAA
+  image #295 R11G11B10F 256x64 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #296 R11G11B10F 32x32 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #472 D24S8 2244x1036 usage=xsrc|xdst|SAMPLED|ds|input mem=0 game-reads=72 as combined sampled input
+  image #474 R32F 2244x1036 usage=xsrc|xdst|SAMPLED|color|input mem=0 game-reads=30 as sampled
+  image #478 R11G11B10F 2244x1036 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #473 D24S8 2244x1036 usage=ds|TRANSIENT|input mem=8 LAZY
+  image #471 R11G11B10F 2244x1036 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #477 RGB10A2 2244x1036 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #494 R32F 2244x1036 usage=SAMPLED|color mem=0 game-reads=60 as combined
+  image #469 RG16F 2244x1036 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #470 RGBA8 2244x1036 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #521 D24S8 2244x1036 usage=xsrc|xdst|SAMPLED|ds|input mem=0 game-reads=54 as combined sampled input
+  image #500 D24S8 2244x1036 usage=SAMPLED|ds mem=0
+  image #486 fmt103 2244x1036 usage=SAMPLED|color mem=0
+  image #502 R16F 141x65 usage=SAMPLED|color mem=0 game-reads=12 as combined
+  image #499 RGBA8 2244x1036 usage=SAMPLED|color mem=0
+  image #510 RGBA8 2244x1036 usage=SAMPLED|color mem=0
+  image #114 D24S8 1080x2338 usage=ds|TRANSIENT|input mem=8 LAZY
+  image #522 RGBA8 2244x1036 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #520 RGBA8 2244x1036 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  lapis: tier 1 miss 0 | D #472 stored | S #477 | U pass 14 > #0 | V #477

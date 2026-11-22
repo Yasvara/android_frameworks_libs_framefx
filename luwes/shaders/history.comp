@@ -1,0 +1,130 @@
+// rays.comp's rays, gathered over frames: one pixel of each two by two traces a frame, in turn.
+// Each pixel finds where its surface was in the last frame's image and keeps a running mean there,
+// adding this frame's ray on its turn, restarted where that spot showed something else
+// (disoccluded, off screen) and held to what this frame's rays around it allow, so moving light
+// and objects do not leave trails.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D lin;  // view depth (depth.frag)
+layout(set = 0, binding = 1) uniform sampler2D tracedVisibility;
+layout(set = 0, binding = 2) uniform sampler2D tracedReflection;
+layout(set = 0, binding = 3) uniform sampler2D tracedBounce;
+layout(set = 0, binding = 4) uniform sampler2D lastVisibility;  // z its view depth, w its frames
+layout(set = 0, binding = 5) uniform sampler2D lastReflection;
+layout(set = 0, binding = 6) uniform sampler2D lastBounce;
+layout(set = 0, binding = 7, rgba16f) uniform writeonly image2D visibility;
+layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D reflection;
+layout(set = 0, binding = 9, rgba16f) uniform writeonly image2D bounce;
+
+layout(push_constant) uniform Frame {
+    mat4 inverse;   // this frame's clip to camera-relative world
+    mat4 previous;  // the same world to the last frame's clip
+    vec4 depth;     // x c, y b (clip depth = c + b / view depth), w 1 when clip y runs up
+    vec4 size;      // xy half size, zw 1 / half size
+    vec4 control;   // x 1 when the last frame's history holds, y the most rays a mean keeps,
+                    // z the frame's turn (rays.comp's frame number)
+} frame;
+
+const ivec2 kTurns[4] = ivec2[4](ivec2(0, 0), ivec2(1, 1), ivec2(1, 0), ivec2(0, 1));
+
+const float kSky = 50000.0;
+
+vec2 ndcOf(vec2 uv) {
+    vec2 n = uv * 2.0 - 1.0;
+    return frame.depth.w > 0.5 ? vec2(n.x, -n.y) : n;
+}
+
+vec2 uvOf(vec2 ndc) {
+    return (frame.depth.w > 0.5 ? vec2(ndc.x, -ndc.y) : ndc) * 0.5 + 0.5;
+}
+
+void main() {
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(px, ivec2(frame.size.xy)))) return;
+    vec2 uv = (vec2(px) + 0.5) * frame.size.zw;
+    float z = textureLod(lin, uv, 0.0).r;
+    ivec2 turn = kTurns[uint(frame.control.z) & 3u];
+    ivec2 last = ivec2(frame.size.xy) - 1;
+    bool traced = all(equal(px & 1, turn));
+    // The ray of this pixel's two by two this frame, or across an edge the nearest in depth of
+    // the rays around: a ray from another surface would bleed its shade over this one.
+    ivec2 home = min((px & ~1) + turn, last);
+    float homeZ = textureLod(lin, (vec2(home) + 0.5) * frame.size.zw, 0.0).r;
+    bool sameSurface = abs(homeZ - z) <= 0.03 * z + 0.05;
+    if (!sameSurface) {
+        float best = abs(homeZ - z);
+        for (int y = -1; y <= 1; y++) {
+            for (int x = -1; x <= 1; x++) {
+                ivec2 q = clamp(home + 2 * ivec2(x, y), ivec2(0), last);
+                float qz = textureLod(lin, (vec2(q) + 0.5) * frame.size.zw, 0.0).r;
+                if (abs(qz - z) < best) {
+                    best = abs(qz - z);
+                    home = q;
+                }
+            }
+        }
+        sameSurface = best <= 0.03 * z + 0.05;
+    }
+    vec4 v = texelFetch(tracedVisibility, home, 0);
+    vec4 r = texelFetch(tracedReflection, home, 0);
+    vec4 b = texelFetch(tracedBounce, home, 0);
+
+    // Where the last frame saw this surface, and whether it saw this surface there.
+    float frames = 0.0;
+    vec2 at = vec2(0.0);
+    if (frame.control.x > 0.5 && z < kSky) {
+        vec4 w = frame.inverse * vec4(ndcOf(uv), frame.depth.x + frame.depth.y / max(z, 1e-4), 1.0);
+        vec4 c = frame.previous * vec4(w.xyz / w.w, 1.0);
+        if (c.w > 1e-4) {
+            at = uvOf(c.xy / c.w);
+            if (all(greaterThanEqual(at, vec2(0.0))) && all(lessThanEqual(at, vec2(1.0)))) {
+                vec4 last = textureLod(lastVisibility, at, 0.0);
+                if (abs(last.z - c.w) < 0.03 * c.w + 0.05) frames = last.w;
+            }
+        }
+    }
+
+    if (frames > 0.0) {
+        // This frame's rays around bound what the history may still say: their mean give or take
+        // twice their spread. One ray a pixel is noisy, a shadow's all or nothing: bounds from
+        // the extremes would pull the mean back to each frame's noise.
+        vec4 rSum = vec4(0.0), rSq = vec4(0.0);
+        vec4 bSum = vec4(0.0), bSq = vec4(0.0);
+        vec2 vSum = vec2(0.0), vSq = vec2(0.0);
+        for (int y = -1; y <= 1; y++) {
+            for (int x = -1; x <= 1; x++) {
+                ivec2 q = clamp(home + 2 * ivec2(x, y), ivec2(0), last);
+                vec4 rq = texelFetch(tracedReflection, q, 0);
+                vec4 bq = texelFetch(tracedBounce, q, 0);
+                vec2 vq = texelFetch(tracedVisibility, q, 0).xy;
+                rSum += rq;
+                rSq += rq * rq;
+                bSum += bq;
+                bSq += bq * bq;
+                vSum += vq;
+                vSq += vq * vq;
+            }
+        }
+        vec4 rMean = rSum / 9.0, rSpread = 2.0 * sqrt(max(rSq / 9.0 - rMean * rMean, 0.0)) + 0.02;
+        vec4 bMean = bSum / 9.0, bSpread = 2.0 * sqrt(max(bSq / 9.0 - bMean * bMean, 0.0)) + 0.02;
+        vec2 vMean = vSum / 9.0, vSpread = 2.0 * sqrt(max(vSq / 9.0 - vMean * vMean, 0.0)) + 0.1;
+        vec2 lv = clamp(textureLod(lastVisibility, at, 0.0).xy, vMean - vSpread, vMean + vSpread);
+        vec4 lr = clamp(textureLod(lastReflection, at, 0.0), rMean - rSpread, rMean + rSpread);
+        vec4 lb = clamp(textureLod(lastBounce, at, 0.0), bMean - bSpread, bMean + bSpread);
+        // Off its turn a pixel keeps its mean, only bounded.
+        float k = 0.0;
+        if (traced && sameSurface) {
+            frames = min(frames + 1.0, frame.control.y);
+            k = 1.0 / frames;
+        }
+        v.xy = mix(lv, v.xy, k);
+        r = mix(lr, r, k);
+        b = mix(lb, b, k);
+    } else {
+        frames = 1.0;
+    }
+    imageStore(visibility, px, vec4(v.xy, z, frames));
+    imageStore(reflection, px, r);
+    imageStore(bounce, px, b);
+}

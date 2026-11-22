@@ -1,0 +1,607 @@
+// Kelir's ray-traced kinds on the game's scene, at half its size, against the triangles the game
+// itself drew this frame (src/rays.cpp captures them, camera-relative world). One pixel of each two
+// by two traces a frame, in turn; history.comp fills the others. Each finds its own triangle with
+// a short ray across the depth the frame shows, for a surface point and normal as exact as the
+// game's geometry; where that misses (alpha-tested leaves, particles) depth stands in. Then:
+// shadows toward the sun the game's own shadow map is drawn for, reflections, and bounced light
+// with its occlusion. A hit the camera sees takes the frame's colour there.
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_ray_tracing_position_fetch : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D lin;    // view depth (depth.frag)
+layout(set = 0, binding = 1) uniform sampler2D scene;  // the game's 3D before its HUD
+layout(set = 0, binding = 2) uniform accelerationStructureEXT world;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D visibility;  // x sun, y occlusion
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D reflection;  // rgb premultiplied, a weight
+layout(set = 0, binding = 5, rgba16f) uniform writeonly image2D bounce;  // rgb linear light
+// The game's own shadow maps of the sun, nearest first, and how to read them.
+layout(set = 0, binding = 6) uniform sampler2D shadowMaps[4];
+layout(set = 0, binding = 7, std140) uniform Shadows {
+    mat4 toMap[4];   // camera-relative world to each map's clip space
+    vec4 mapInfo[4];  // x 1 depth reversed, y 1 drawn upside down, z depth per metre, w 1 there
+    vec4 counts;      // x maps, y the sun's light over the sky's, z G-buffer targets
+    mat4 view;        // columns: the camera's x, y and z axes in world
+    vec4 roles;       // x albedo target + 1, y normal target + 1, z its decoding; 0 none
+    vec4 mapRegion[4];  // where in its image each map was drawn: xy corner, zw size
+} shadows;
+// The pass that drew the scene's geometry stored these beside its colour: a G-buffer, if any.
+layout(set = 0, binding = 8) uniform sampler2D gbuffer[4];
+// Added to by the rays, read back frames later (luwes RayStats): 0 sun over sky in 1/256, 1 the
+// shadow edges that measured it; from 2, per G-buffer target and log-chroma channel the sums n,
+// x, y, xy, xx, yy (x the scene's) in 1/64; from 50, per target the cosine with the triangles'
+// normal per decoding, (1 + it) in 1/500, and n.
+layout(set = 0, binding = 9, std430) buffer Stats { int stats[]; };
+// Per instance of `world` (src/rays.h Scene::surfaces): x its first vertex in `uvs`, y its texture
+// (~0 solid), z the channel tested; cut where a·t + b < 0. The textures are the ones the game's
+// alpha-tested draws sampled, so leaves and hair cut where the game cut them.
+struct Surface {
+    uvec4 at;
+    vec4 cut;  // a, b
+};
+layout(set = 0, binding = 10, std430) readonly buffer Surfaces { Surface surfaces[]; };
+layout(set = 0, binding = 11, std430) readonly buffer Coordinates { vec2 uvs[]; };
+layout(set = 0, binding = 12) uniform sampler2D textures[64];
+const int kChroma = 2;
+const int kNormals = 50;
+const float kChromaFixed = 64.0;
+
+layout(push_constant) uniform Frame {
+    mat4 viewProjection;  // camera-relative world to clip, the frame's jitter included
+    mat4 inverse;         // clip to camera-relative world
+    vec4 sun;             // xyz toward the sun, w 1 when known
+    vec4 depth;           // x c, y b (clip depth = c + b / distance), z 1 for GL clip depth,
+                          // w 1 when clip y runs up the image
+    vec4 size;            // xy half size, zw 1 / half size
+    vec4 rays[3];         // kelir::PackSceneRays
+    vec4 sky;             // w a debug view, 0 none
+    vec4 noise;           // x this frame's number, for samples that differ frame to frame; y the
+                          // parts traced: 1 own surface, 2 sun, 4 reflection, 8 bounce
+} frame;
+
+const float kSky = 50000.0;
+const float kPi = 3.14159265;
+
+// The frame's own sky and its overall colour, from samples along its top and bottom edges: for
+// rays that leave the screen. Display encoded.
+shared vec4 gEdge[16];
+vec3 gSky;
+vec3 gAverage;
+
+float hash(vec2 p, float salt) {
+    return fract(52.9829189 * fract(dot(p + salt, vec2(0.06711056, 0.00583715))));
+}
+
+vec2 ndcOf(vec2 uv) {
+    vec2 n = uv * 2.0 - 1.0;
+    return frame.depth.w > 0.5 ? vec2(n.x, -n.y) : n;
+}
+
+vec2 uvOf(vec2 ndc) {
+    return (frame.depth.w > 0.5 ? vec2(ndc.x, -ndc.y) : ndc) * 0.5 + 0.5;
+}
+
+vec3 unproject(vec2 uv, float d) {
+    vec4 w = frame.inverse * vec4(ndcOf(uv), d, 1.0);
+    return w.xyz / w.w;
+}
+
+// A point's view depth, what `lin` holds: its clip w.
+float depthOf(vec3 p) {
+    return (frame.viewProjection * vec4(p, 1.0)).w;
+}
+
+vec3 pointAt(vec2 uv) {
+    float z = textureLod(lin, uv, 0.0).r;
+    // c and b map distance straight to clip depth, GL's range or Vulkan's.
+    return unproject(uv, frame.depth.x + frame.depth.y / max(z, 1e-4));
+}
+
+// The colour the camera sees at a point, when it is on screen and nothing nearer covers it.
+bool onScreen(vec3 p, out vec3 colour) {
+    vec4 c = frame.viewProjection * vec4(p, 1.0);
+    if (c.w <= 1e-4) return false;
+    vec2 uv = uvOf(c.xy / c.w);
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return false;
+    float seen = textureLod(lin, uv, 0.0).r;
+    if (seen < c.w * 0.97 - 0.05) return false;
+    colour = textureLod(scene, uv, 0.0).rgb;
+    return true;
+}
+
+vec3 toLinear(vec3 c) {
+    return pow(max(c, vec3(0.0)), vec3(2.2));
+}
+
+// Toward `dir` with nothing in the way: the sky the frame shows there, or its colour.
+vec3 skyToward(vec3 dir) {
+    vec4 c = frame.viewProjection * vec4(dir * 1000.0, 1.0);
+    if (c.w > 1e-4) {
+        vec2 uv = uvOf(c.xy / c.w);
+        if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0))) &&
+            textureLod(lin, uv, 0.0).r >= kSky) {
+            return textureLod(scene, uv, 0.0).rgb;
+        }
+    }
+    return gSky;
+}
+
+// What the game's own shadow maps say at `p`: 1 lit, 0 shadowed, -1 when none covers it. `gap`:
+// how far toward the sun the map's nearest surface lies past `p`, in metres, when shadowed.
+// `soft`: the share of the nine map texels around that are lit, the game's own soft edge.
+float gameShadow(vec3 p, out float gap, out float soft) {
+    gap = 0.0;
+    soft = 1.0;
+    int count = int(shadows.counts.x + 0.5);
+    for (int i = 0; i < 4; i++) {
+        if (i >= count) break;
+        vec4 c = shadows.toMap[i] * vec4(p, 1.0);
+        vec3 q = c.xyz / c.w;
+        if (any(greaterThan(abs(q.xy), vec2(0.97)))) continue;
+        vec4 info = shadows.mapInfo[i];
+        float depth = frame.depth.z > 0.5 ? q.z * 0.5 + 0.5 : q.z;
+        if (depth < 0.0 || depth > 1.0) continue;
+        vec2 uv = q.xy * 0.5 + 0.5;
+        if (info.y > 0.5) uv.y = 1.0 - uv.y;
+        vec4 region = shadows.mapRegion[i];
+        uv = region.xy + uv * region.zw;
+        // Nearer the sun than `p` by more than a few centimetres: something stands in its light.
+        float bias = 0.05 + 0.002 * length(p);
+        vec2 texel = 1.0 / vec2(textureSize(shadowMaps[i], 0));
+        float lit = 0.0;
+        float centre = 0.0;
+        for (int y = -1; y <= 1; y++) {
+            for (int x = -1; x <= 1; x++) {
+                float stored = textureLod(shadowMaps[i], uv + vec2(x, y) * texel, 0.0).r;
+                float ahead = (info.x > 0.5 ? stored - depth : depth - stored) / max(info.z, 1e-9);
+                lit += ahead > bias ? 0.0 : 1.0;
+                if (x == 0 && y == 0) centre = ahead;
+            }
+        }
+        soft = lit / 9.0;
+        if (centre > bias) {
+            gap = centre;
+            return 0.0;
+        }
+        return 1.0;
+    }
+    return -1.0;
+}
+
+// One of the frame's textures, each by a constant index: no indexing feature is asked of the device.
+vec4 texel(uint i, vec2 uv) {
+    switch (i) {
+#define TEXEL(k) case k: return textureLod(textures[k], uv, 0.0);
+#define TEXELS8(k) TEXEL(k) TEXEL(k + 1) TEXEL(k + 2) TEXEL(k + 3) TEXEL(k + 4) TEXEL(k + 5) \
+        TEXEL(k + 6) TEXEL(k + 7)
+        TEXELS8(0) TEXELS8(8) TEXELS8(16) TEXELS8(24) TEXELS8(32) TEXELS8(40) TEXELS8(48) TEXELS8(56)
+#undef TEXELS8
+#undef TEXEL
+    }
+    return vec4(1.0);
+}
+
+// Whether a candidate hit on an alpha-tested instance is where the game kept the surface: its
+// texel at the hit, against the game's own cutoff.
+bool kept(uint instance, uint primitive, vec2 bary) {
+    // Past what the buffers hold a read faults the GPU: such a hit is solid.
+    if (instance >= uint(surfaces.length())) return true;
+    Surface s = surfaces[instance];
+    if (s.at.y == 0xffffffffu) return true;
+    uint v = s.at.x + 3u * primitive;
+    if (v + 2u >= uint(uvs.length()) || v < s.at.x) return true;
+    vec2 uv = uvs[v] * (1.0 - bary.x - bary.y) + uvs[v + 1u] * bary.x + uvs[v + 2u] * bary.y;
+    float t = texel(s.at.y, uv)[s.at.z & 3u];
+    return s.cut.x * t + s.cut.y >= 0.0;
+}
+
+// Candidates a ray tests against their textures: past them it takes the rest as solid, so a ray
+// through dense leaves costs a bounded time (a GPU that runs too long resets).
+const uint kTestedCandidates = 24u;
+
+// Traverses `q`, keeping the candidates of alpha-tested instances the texture keeps.
+#define TRAVERSE(q)                                                                         \
+    {                                                                                       \
+        uint tested = 0u;                                                                   \
+        while (rayQueryProceedEXT(q)) {                                                     \
+            if (tested++ >= kTestedCandidates ||                                            \
+                kept(rayQueryGetIntersectionInstanceIdEXT(q, false),                        \
+                     rayQueryGetIntersectionPrimitiveIndexEXT(q, false),                    \
+                     rayQueryGetIntersectionBarycentricsEXT(q, false))) {                   \
+                rayQueryConfirmIntersectionEXT(q);                                          \
+            }                                                                               \
+        }                                                                                   \
+    }
+
+// NaN or infinity in a ray sends the traversal anywhere: such a ray is never traced.
+bool sane(vec3 origin, vec3 dir) {
+    return !any(isnan(origin)) && !any(isinf(origin)) && !any(isnan(dir)) && !any(isinf(dir)) &&
+            dot(dir, dir) > 0.5;
+}
+
+bool hits(vec3 origin, vec3 dir, float far, out float t) {
+    t = far;
+    if (!sane(origin, dir) || !(far > 0.0)) return false;
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, world, gl_RayFlagsNoneEXT, 0xff, origin, 0.0, dir, far);
+    TRAVERSE(q)
+    if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+        return false;
+    }
+    t = rayQueryGetIntersectionTEXT(q, true);
+    return true;
+}
+
+bool blocked(vec3 origin, vec3 dir, float far) {
+    if (!sane(origin, dir) || !(far > 0.0)) return false;
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, world, gl_RayFlagsTerminateOnFirstHitEXT, 0xff,
+                          origin, 0.0, dir, far);
+    TRAVERSE(q)
+    return rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionNoneEXT;
+}
+
+// The pixel's own surface: the triangle the eye's ray meets near the depth the frame shows. Only
+// that stretch of the ray is traced: the tree culls everything else at its first boxes.
+bool surface(vec2 uv, float z, out vec3 p, out vec3 n) {
+    vec3 shown = pointAt(uv);
+    float reach = length(shown);
+    vec3 dir = shown / reach;
+    float margin = 0.03 * reach + 0.05;
+    vec3 from = dir * max(reach - margin, 0.0);
+    if (!sane(from, dir)) return false;
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, world, gl_RayFlagsNoneEXT, 0xff, from, 0.0, dir, 2.0 * margin);
+    TRAVERSE(q)
+    if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+        return false;
+    }
+    float t = rayQueryGetIntersectionTEXT(q, true);
+    vec3 tri[3];
+    rayQueryGetIntersectionTriangleVertexPositionsEXT(q, true, tri);
+    p = from + dir * t;
+    // The triangle must be the one the frame shows: not something in front the depth says is not.
+    if (abs(depthOf(p) - z) > max(0.02 * z, 0.05)) return false;
+    // A degenerate triangle has no normal: depth stands in.
+    vec3 c = cross(tri[1] - tri[0], tri[2] - tri[0]);
+    float area = dot(c, c);
+    if (!(area > 1e-20) || isinf(area)) return false;
+    n = c * inversesqrt(area);
+    if (dot(n, dir) > 0.0) n = -n;
+    return true;
+}
+
+vec3 instanceSeen(vec2 uv) {
+    vec3 dir = normalize(pointAt(uv));
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, world, gl_RayFlagsNoneEXT, 0xff, vec3(0.0), 0.0, dir, kSky);
+    TRAVERSE(q)
+    if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+        return vec3(0.0);
+    }
+    float id = float(rayQueryGetIntersectionInstanceCustomIndexEXT(q, true) & 0x3fffffu);
+    return vec3(hash(vec2(id, 1.0), 3.0), hash(vec2(id, 2.0), 7.0), hash(vec2(id, 3.0), 11.0));
+}
+
+// The first alpha-tested candidate the eye's ray meets: its coordinate's fraction red and green,
+// whether the game's test keeps it blue; black none.
+vec3 alphaSeen(vec2 uv) {
+    vec3 dir = normalize(pointAt(uv));
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, world, gl_RayFlagsNoneEXT, 0xff, vec3(0.0), 0.0, dir, kSky);
+    while (rayQueryProceedEXT(q)) {
+        uint instance = rayQueryGetIntersectionInstanceIdEXT(q, false);
+        if (instance >= uint(surfaces.length())) return vec3(1.0, 0.0, 1.0);
+        Surface s = surfaces[instance];
+        uint v = s.at.x + 3u * rayQueryGetIntersectionPrimitiveIndexEXT(q, false);
+        if (v + 2u >= uint(uvs.length())) return vec3(1.0, 0.0, 1.0);
+        vec2 b = rayQueryGetIntersectionBarycentricsEXT(q, false);
+        vec2 at = uvs[v] * (1.0 - b.x - b.y) + uvs[v + 1u] * b.x + uvs[v + 2u] * b.y;
+        float t = texel(s.at.y, at)[s.at.z & 3u];
+        return vec3(fract(at), s.cut.x * t + s.cut.y >= 0.0 ? 1.0 : 0.0);
+    }
+    return vec3(0.0);
+}
+
+// What shades the pixel from the sun: white lit; else its caster, red held out of sight, yellow
+// a tree changed this frame, a colour each otherwise.
+vec3 casterSeen(vec3 origin, vec3 l) {
+    if (!sane(origin, l)) return vec3(0.0);
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, world, gl_RayFlagsTerminateOnFirstHitEXT, 0xff, origin, 0.0, l,
+                          frame.rays[0].y);
+    TRAVERSE(q)
+    if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+        return vec3(1.0);
+    }
+    uint index = rayQueryGetIntersectionInstanceCustomIndexEXT(q, true);
+    if ((index & 0x800000u) != 0u) return vec3(1.0, 0.0, 0.0);
+    if ((index & 0x400000u) != 0u) return vec3(1.0, 1.0, 0.0);
+    float id = float(index & 0x3fffffu);
+    return vec3(0.1, 0.3 + 0.5 * hash(vec2(id, 2.0), 7.0), 0.3 + 0.7 * hash(vec2(id, 3.0), 11.0));
+}
+
+float luminance(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+// The sun's light over the sky's, from the frame itself: a lit pixel beside one the game's map
+// shadows on the same plane and of the same hue differ by the sun's light alone.
+void measureSun(vec2 uv, vec3 p, vec3 n, float ndl) {
+    vec3 lit = toLinear(textureLod(scene, uv, 0.0).rgb);
+    const vec2 kSteps[4] = vec2[4](vec2(6, 0), vec2(-6, 0), vec2(0, 6), vec2(0, -6));
+    for (int i = 0; i < 4; i++) {
+        vec2 at = uv + kSteps[i] * frame.size.zw;
+        if (any(lessThan(at, vec2(0.0))) || any(greaterThan(at, vec2(1.0)))) continue;
+        if (textureLod(lin, at, 0.0).r >= kSky) continue;
+        vec3 q = pointAt(at);
+        if (abs(dot(q - p, n)) > 0.01 * length(p) + 0.02) continue;
+        float gap;
+        float soft;
+        if (gameShadow(q, gap, soft) != 0.0 || gap < 0.3 || soft > 0.01) continue;
+        vec3 shade = toLinear(textureLod(scene, at, 0.0).rgb);
+        float shaded = luminance(shade);
+        float ratio = luminance(lit) / max(shaded, 1e-4);
+        vec3 hueLit = lit / max(luminance(lit), 1e-4);
+        vec3 hueShade = shade / max(shaded, 1e-4);
+        if (shaded < 1e-3 || ratio < 1.05 || ratio > 40.0 || distance(hueLit, hueShade) > 0.15) {
+            continue;
+        }
+        atomicAdd(stats[0], int(min((ratio - 1.0) / ndl, 20.0) * 256.0));
+        atomicAdd(stats[1], 1);
+        return;
+    }
+}
+
+// How each G-buffer target's log chroma follows the scene's: an albedo's does, the light's own
+// hue adding about the same everywhere.
+void measureChroma(vec2 uv) {
+    const float e = 0.004;
+    vec3 c = toLinear(textureLod(scene, uv, 0.0).rgb);
+    if (luminance(c) < 0.002) return;
+    vec2 x = clamp(log((c.rb + e) / (c.g + e)), -4.0, 4.0);
+    int count = int(shadows.counts.z + 0.5);
+    for (int i = 0; i < 4; i++) {
+        if (i >= count) break;
+        vec3 g = textureLod(gbuffer[i], uv, 0.0).rgb;
+        if (max(g.r, max(g.g, g.b)) < 0.01) continue;
+        vec2 y = clamp(log((g.rb + e) / (g.g + e)), -4.0, 4.0);
+        for (int k = 0; k < 2; k++) {
+            int at = kChroma + (i * 2 + k) * 6;
+            int xi = int(round(x[k] * kChromaFixed));
+            int yi = int(round(y[k] * kChromaFixed));
+            atomicAdd(stats[at], 1);
+            atomicAdd(stats[at + 1], xi);
+            atomicAdd(stats[at + 2], yi);
+            atomicAdd(stats[at + 3], xi * yi);
+            atomicAdd(stats[at + 4], xi * xi);
+            atomicAdd(stats[at + 5], yi * yi);
+        }
+    }
+}
+
+vec3 octahedral(vec2 e) {
+    e = e * 2.0 - 1.0;
+    vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+    float t = max(-n.z, 0.0);
+    n.xy += vec2(n.x >= 0.0 ? -t : t, n.y >= 0.0 ? -t : t);
+    return n;
+}
+
+// A normal target's texel as a world normal, encoded the way `d` says (lapis/rust/src/roles.rs):
+// 0 xyz world, 1 xyz view, 2 octahedral world, 3 octahedral view, 4 view xy with z rebuilt. Zero
+// when the texel holds none.
+vec3 decodeNormal(vec4 v, int d) {
+    vec3 n;
+    if (d <= 1) {
+        n = v.xyz * 2.0 - 1.0;
+    } else if (d <= 3) {
+        n = octahedral(v.xy);
+    } else {
+        vec2 xy = v.xy * 2.0 - 1.0;
+        n = vec3(xy, sqrt(max(1.0 - dot(xy, xy), 0.0)));
+    }
+    float l = length(n);
+    if (l < 0.5 || l > 1.5) return vec3(0.0);
+    n /= l;
+    return d == 1 || d >= 3 ? normalize(mat3(shadows.view) * n) : n;
+}
+
+// How each G-buffer target, read in each encoding, agrees with this triangle's normal.
+void measureNormals(vec2 uv, vec3 n) {
+    int count = int(shadows.counts.z + 0.5);
+    for (int i = 0; i < 4; i++) {
+        if (i >= count) break;
+        vec4 v = textureLod(gbuffer[i], uv, 0.0);
+        for (int d = 0; d < 5; d++) {
+            vec3 m = decodeNormal(v, d);
+            float c = dot(m, m) > 0.0 ? dot(m, n) : -1.0;
+            atomicAdd(stats[kNormals + i * 6 + d], int((1.0 + c) * 500.0));
+        }
+        atomicAdd(stats[kNormals + i * 6 + 5], 1);
+    }
+}
+
+// The surface's own normal from the game's G-buffer, normal maps and all, once its target is
+// known; else `n`.
+vec3 shadingNormal(vec2 uv, vec3 n) {
+    int target = int(shadows.roles.y + 0.5) - 1;
+    if (target < 0) return n;
+    vec4 v = vec4(0.0);
+    for (int i = 0; i < 4; i++) {
+        if (i == target) v = textureLod(gbuffer[i], uv, 0.0);
+    }
+    vec3 m = decodeNormal(v, int(shadows.roles.z + 0.5));
+    if (dot(m, m) == 0.0) return n;
+    if (dot(m, n) < 0.0) m = -m;
+    return m;
+}
+
+vec3 cosineAround(vec3 n, vec2 u) {
+    vec3 t = normalize(abs(n.y) < 0.99 ? cross(n, vec3(0.0, 1.0, 0.0)) : cross(n, vec3(1.0, 0.0, 0.0)));
+    vec3 b = cross(n, t);
+    float r = sqrt(u.x);
+    float a = 2.0 * kPi * u.y;
+    return normalize(t * r * cos(a) + b * r * sin(a) + n * sqrt(1.0 - u.x));
+}
+
+void sampleEdges() {
+    uint t = gl_LocalInvocationIndex;
+    if (t < 16u) {
+        vec2 at = vec2((float(t % 8u) + 0.5) / 8.0, t < 8u ? 0.03 : 0.97);
+        bool sky = textureLod(lin, at, 0.0).r >= kSky;
+        gEdge[t] = vec4(textureLod(scene, at, 0.0).rgb, sky ? 1.0 : 0.0);
+    }
+    barrier();
+    vec4 sky = vec4(0.0);
+    vec3 all = vec3(0.0);
+    for (int i = 0; i < 16; i++) {
+        sky += vec4(gEdge[i].rgb * gEdge[i].a, gEdge[i].a);
+        all += gEdge[i].rgb;
+    }
+    gAverage = all / 16.0;
+    gSky = sky.a > 0.0 ? sky.rgb / sky.a : gAverage * 0.5;
+}
+
+const ivec2 kTurns[4] = ivec2[4](ivec2(0, 0), ivec2(1, 1), ivec2(1, 0), ivec2(0, 1));
+
+void main() {
+    // This frame's pixel of its two by two (history.comp's turn).
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy) * 2 + kTurns[uint(frame.noise.x) & 3u];
+    sampleEdges();
+    if (any(greaterThanEqual(px, ivec2(frame.size.xy)))) return;
+    uint parts = uint(frame.noise.y + 0.5);
+    vec2 uv = (vec2(px) + 0.5) * frame.size.zw;
+    float z = textureLod(lin, uv, 0.0).r;
+    if (z >= kSky) {
+        imageStore(visibility, px, vec4(1.0));
+        imageStore(reflection, px, vec4(0.0));
+        imageStore(bounce, px, vec4(0.0));
+        return;
+    }
+    vec3 p;
+    vec3 n;
+    bool exact = (parts & 1u) != 0u && surface(uv, z, p, n);
+    if (!exact) {
+        p = pointAt(uv);
+        vec3 dx = pointAt(uv + vec2(frame.size.z, 0.0)) - p;
+        vec3 dy = pointAt(uv + vec2(0.0, frame.size.w)) - p;
+        vec3 c = cross(dx, dy);
+        float area = dot(c, c);
+        n = area > 1e-20 && !isinf(area) ? c * inversesqrt(area) : -normalize(p);
+        if (dot(n, p) > 0.0) n = -n;
+    }
+    vec3 view = normalize(p);
+    // Off the surface by what float precision at this distance needs, and a little along the
+    // normal so grazing rays clear their own triangle.
+    vec3 origin = p + n * max(0.002 * length(p), 0.01);
+    // A different sample each frame, spread evenly over frames (R2), for history.comp to gather.
+    vec2 u = fract(vec2(hash(vec2(px), 0.0), hash(vec2(px.yx), 17.0)) +
+                   frame.noise.x * vec2(0.7548777, 0.5698403));
+
+    // The sun, relit: the game's frame is its albedo times the sky's light plus the sun's where its
+    // shadow maps say lit. Over the same albedo, light with the sun as the rays see it is the
+    // frame times (1 + k ndl s) / (1 + k ndl s_game), k the sun's light over the sky's: the
+    // albedo cancels, so the game's colours stay exactly its own and only its sunlight moves.
+    float sun = 1.0;
+    float gameGap = 0.0;
+    float gameSoft = 1.0;
+    float game = -1.0;
+    if ((parts & 2u) != 0u && frame.rays[0].z > 0.0 && frame.sun.w > 0.5 &&
+        dot(frame.sun.xyz, frame.sun.xyz) > 0.25) {
+        vec3 l = normalize(frame.sun.xyz);
+        float ndl = dot(shadingNormal(uv, n), l);
+        game = gameShadow(p, gameGap, gameSoft);
+        // Faces turned from the sun are the game's own shade already.
+        if (ndl > 0.0) {
+            vec3 jitter = (vec3(u, hash(vec2(px), 5.0)) - 0.5) * frame.rays[0].x;
+            float s = blocked(origin, normalize(l + jitter), frame.rays[0].y) ? 0.0 : 1.0;
+            // A caster the rays do not hold (alpha-tested leaves, characters) stands in the
+            // game's map, well apart from this surface.
+            if (s > 0.5 && game == 0.0 && gameGap > 0.3) s = 0.0;
+            // Where no map reaches the game drew no shadow.
+            float shown = game < 0.0 ? 1.0 : gameSoft;
+            float k = shadows.counts.y;
+            float relit = (1.0 + k * ndl * s) / (1.0 + k * ndl * shown);
+            sun = clamp(mix(1.0, relit, frame.rays[0].z), 0.15, 6.0);
+            if (game == 1.0 && ndl > 0.25 && ((px.x ^ px.y) & 3) == 0) measureSun(uv, p, n, ndl);
+        }
+    }
+    if (((px.x * 3 + px.y) & 15) == 0) {
+        measureChroma(uv);
+        if (exact) measureNormals(uv, n);
+    }
+
+    vec4 mirrored = vec4(0.0);
+    float fresnel = 0.04 + 0.96 * pow(1.0 - max(dot(-view, n), 0.0), 5.0);
+    float w = fresnel * frame.rays[1].z;
+    // Where it would add less than a step of the frame's colour, no ray.
+    if ((parts & 4u) != 0u && w > 0.012) {
+        vec3 dir = reflect(view, n);
+        dir = normalize(mix(cosineAround(dir, u), dir, frame.rays[1].x));
+        float t;
+        vec3 seen;
+        if (hits(origin, dir, frame.rays[1].y, t)) {
+            vec3 c;
+            seen = onScreen(origin + dir * t, c) ? c : gAverage * 0.6;
+        } else {
+            seen = skyToward(dir);
+        }
+        mirrored = vec4(seen * w, w);
+    }
+
+    float occlusion = 1.0;
+    vec3 bounced = vec3(0.0);
+    if ((parts & 8u) != 0u && frame.rays[2].w > 0.0) {
+        int count = int(frame.rays[2].x);
+        float open = 0.0;
+        // Light from what the rays hit; the sky's light is in the game's frame already, and only
+        // the occlusion takes from it.
+        for (int i = 0; i < count; i++) {
+            vec2 v = fract(u + vec2(0.618034, 0.381966) * float(i));
+            vec3 dir = cosineAround(n, v);
+            float t;
+            if (hits(origin, dir, frame.rays[2].y, t)) {
+                vec3 c;
+                bounced += toLinear(onScreen(origin + dir * t, c) ? c : gAverage * 0.5);
+                open += smoothstep(0.0, frame.rays[2].y, t);
+            } else {
+                open += 1.0;
+            }
+        }
+        float k = 1.0 / float(max(count, 1));
+        occlusion = mix(1.0, open * k, frame.rays[2].w);
+        bounced *= k * frame.rays[2].z * frame.rays[2].w;
+    }
+    int debugView = int(frame.sky.w + 0.5);
+    if (debugView > 0) {
+        // 1 own triangle (green) or depth (red); 2 normal; 3 sun; 4 occlusion; 5 bounce; 6 the
+        // game's shadow (red where no map covers); 7 the game's shadow red, the rays' green; 8 the
+        // draw the eye's ray meets, a colour each (black none); 9 to 12 a G-buffer target; 13 the
+        // shading normal (the G-buffer's once found); 14 the first alpha-tested surface met; 15 what shades
+// it from the sun.
+        float gap;
+        float soft;
+        float game = gameShadow(p, gap, soft);
+        vec3 shown = debugView == 1 ? (exact ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0))
+                   : debugView == 2 ? n * 0.5 + 0.5
+                   : debugView == 3 ? vec3(sun)
+                   : debugView == 4 ? vec3(occlusion)
+                   : debugView == 5 ? pow(bounced, vec3(1.0 / 2.2))
+                   : debugView == 6 ? (game < 0.0 ? vec3(1.0, 0.0, 0.0) : vec3(game))
+                   : debugView == 7 ? vec3(max(game, 0.0), sun, 0.0)
+                   : debugView == 8 ? instanceSeen(uv)
+                   : debugView == 14 ? alphaSeen(uv)
+                   : debugView == 15 ? casterSeen(origin, normalize(frame.sun.xyz))
+                   : debugView <= 12 ? textureLod(gbuffer[clamp(debugView - 9, 0, 3)], uv, 0.0).rgb
+                   : shadingNormal(uv, n) * 0.5 + 0.5;
+        imageStore(visibility, px, vec4(1.0));
+        imageStore(reflection, px, vec4(shown, 1.0));
+        imageStore(bounce, px, vec4(0.0));
+        return;
+    }
+    imageStore(visibility, px, vec4(sun, occlusion, 0.0, 0.0));
+    imageStore(reflection, px, mirrored);
+    imageStore(bounce, px, vec4(bounced, 1.0));
+}

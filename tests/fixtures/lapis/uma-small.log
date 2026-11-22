@@ -1,0 +1,212 @@
+com.cygames.umamusume shot 2 frame 0: 61 events; calls so far rp 86755 rp2 0 rendering 0 draw 1067027 submit 11577 submit2 0 execute 0
+  submit qab90
+  dispatch x29 |
+  layout #1887 ds_ro>d_att_s_ro
+  pass 0 rp 133x289 draws=34 ztest=34 zwrite=34 | C #1886 RGBA8 clear/STORE>color | D #1887 D16 clear/STORE>d_att_s_ro clear=1.000 | R #1857 fmt147 2048x2048 #1872 fmt147 2048x2048 #1873 fmt151 1024x1024 #1874 fmt147 1024x512 +21
+    draws WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+  pass 1 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2322 RGBA8 dc/STORE>color | R #1886 RGBA8 133x289*
+  pass 2 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2323 RGBA8 dc/STORE>color | R #2322 RGBA8 133x289*
+  pass 3 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2322 RGBA8 dc/STORE>color | R #2323 RGBA8 133x289*
+  pass 4 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2321 RGBA8 dc/STORE>color | R #2322 RGBA8 133x289*
+  layout #1887 d_att_s_ro>ds_ro
+  pass 5 rp 133x289 draws=1 ztest=1 zwrite=0 | C #1886 RGBA8 dc/STORE>color | D #1887 D16 none/none>ds_ro | R #2321 RGBA8 133x289*
+  layout #2098 ds_ro>ds_att
+  pass 6 rp 720x1556 draws=38 ztest=38 zwrite=38 | | D #2098 D24S8 clear/STORE>ds_att clear=1.000 s:STORE | R #1891 fmt147 2048x2048 #1903 fmt147 1024x1024 #1911 fmt147 256x256 #1991 fmt147 1024x1024 +6
+    draws wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+  pass 7 rp 720x1556 draws=114 ztest=114 zwrite=75 | C #2324 RGBA8 x4 clear/dc>color C #2318 RGBA8 dc/STORE>color C #2319 D24S8 dc/STORE>ds_att | D #2320 D24S8 x4 clear/dc>ds_att clear=1.000 d-resolve | R #1886 RGBA8 133x289* #14 RGBA8 4x4 #15 RGBA8 4x4 #18 RGBA8 4x4 #1857 fmt147 2048x2048 +103
+    draws wwwwwwwwwwwwwwwwwwaawwwwwwwwwawwwwwwwawwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTWWTTWWWW
+  layout #2098 ds_att>ds_ro
+  pass 8 rp 720x1556 draws=1 ztest=0 zwrite=0 | C #2325 RGBA8 dc/STORE>color | R #2098 D24S8 720x1556* #2318 RGBA8 720x1556*
+  pass 9 rp 360x778 draws=1 ztest=0 zwrite=0 | C #2326 RGBA8 dc/STORE>color | R #2325 RGBA8 720x1556*
+  pass 10 rp 360x778 draws=1 ztest=0 zwrite=0 | C #2327 RGBA8 dc/STORE>color | R #2326 RGBA8 360x778*
+  pass 11 rp 180x389 draws=1 ztest=0 zwrite=0 | C #2102 RGBA8 dc/STORE>color | R #2326 RGBA8 360x778*
+  pass 12 rp 180x389 draws=1 ztest=0 zwrite=0 | C #2308 RGBA8 dc/STORE>color | R #2102 RGBA8 180x389*
+  pass 13 rp 720x1556 draws=1 ztest=0 zwrite=0 | C #2104 RGBA8 dc/STORE>color | R #2098 D24S8 720x1556* #2308 RGBA8 180x389* #2325 RGBA8 720x1556* #2327 RGBA8 360x778*
+  pass 14 rp 720x1556 draws=1 ztest=0 zwrite=0 | C #1918 RGBA8 dc/STORE>color | R #2104 RGBA8 720x1556*
+  pass 15 rp 720x1556 sub2 draws=2 ztest=2 zwrite=1 | C #2324 RGBA8 x4 dc/dc>color C #2318 RGBA8 dc/STORE>color C #2319 D24S8 load/STORE>ds_att | D #2320 D24S8 x4 none/none>ds_att d-resolve | R #1918 RGBA8 720x1556* #2104 RGBA8 720x1556* #2319 D24S8 720x1556*
+  pass 16 rp 291x629 draws=52 ztest=52 zwrite=0 | C #57 RGBA8 clear/STORE>color | D #58 D24S8 clear/STORE>ds_att clear=1.000 s:STORE | R #2318 RGBA8 720x1556* #56 fmt151 2048x2048 #1809 fmt151 4096x2048 #1811 fmt151 256x256 #1812 fmt151 256x128 +8
+    draws aTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTtTTTTTTTTTTT
+  pass 17 rp 291x629 draws=1 ztest=1 zwrite=0 | C #42 RGBA8 x4 clear/dc>color C #10 RGBA8 dc/STORE>color C #11 D24S8 dc/dc>ds_att | D #12 D24S8 x4 clear/dc>ds_att clear=1.000 | R #57 RGBA8 291x629*
+  submit qab90
+  pass 18 rp 291x629 draws=1 ztest=0 zwrite=0 | C #0 RGBA8 dc/STORE>present | R #10 RGBA8 291x629*
+  image #1887 D16 133x289 usage=xsrc|xdst|SAMPLED|ds mem=0
+  image #1886 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2322 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2323 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2321 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2098 D24S8 720x1556 usage=xsrc|xdst|SAMPLED|ds mem=0 game-reads=11 as combined
+  image #2319 D24S8 720x1556 usage=xsrc|xdst|SAMPLED|ds|input mem=0 game-reads=4244 as input
+  image #2320 D24S8 720x1556 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #2318 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2325 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2326 RGBA8 360x778 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2102 RGBA8 180x389 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2308 RGBA8 180x389 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2327 RGBA8 360x778 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2104 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #1918 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #58 D24S8 291x629 usage=xsrc|xdst|SAMPLED|ds mem=0
+  image #11 D24S8 291x629 usage=xsrc|xdst|SAMPLED|ds|input mem=0
+  image #12 D24S8 291x629 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #57 RGBA8 291x629 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #10 RGBA8 291x629 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  lapis: tier 2 miss 2 | D #2320 | S #0 | U pass -1 > #0 | V #0
+com.cygames.umamusume shot 2 frame 1: 61 events; calls so far rp 86774 rp2 0 rendering 0 draw 1067281 submit 11579 submit2 0 execute 0
+  submit qab90
+  dispatch x29 |
+  layout #1887 ds_ro>d_att_s_ro
+  pass 0 rp 133x289 draws=34 ztest=34 zwrite=34 | C #1886 RGBA8 clear/STORE>color | D #1887 D16 clear/STORE>d_att_s_ro clear=1.000 | R #1857 fmt147 2048x2048 #1872 fmt147 2048x2048 #1873 fmt151 1024x1024 #1874 fmt147 1024x512 +21
+    draws WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+  pass 1 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2322 RGBA8 dc/STORE>color | R #1886 RGBA8 133x289*
+  pass 2 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2323 RGBA8 dc/STORE>color | R #2322 RGBA8 133x289*
+  pass 3 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2322 RGBA8 dc/STORE>color | R #2323 RGBA8 133x289*
+  pass 4 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2321 RGBA8 dc/STORE>color | R #2322 RGBA8 133x289*
+  layout #1887 d_att_s_ro>ds_ro
+  pass 5 rp 133x289 draws=1 ztest=1 zwrite=0 | C #1886 RGBA8 dc/STORE>color | D #1887 D16 none/none>ds_ro | R #2321 RGBA8 133x289*
+  layout #2098 ds_ro>ds_att
+  pass 6 rp 720x1556 draws=38 ztest=38 zwrite=38 | | D #2098 D24S8 clear/STORE>ds_att clear=1.000 s:STORE | R #1891 fmt147 2048x2048 #1903 fmt147 1024x1024 #1911 fmt147 256x256 #1991 fmt147 1024x1024 +6
+    draws wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+  pass 7 rp 720x1556 draws=114 ztest=114 zwrite=75 | C #2324 RGBA8 x4 clear/dc>color C #2318 RGBA8 dc/STORE>color C #2319 D24S8 dc/STORE>ds_att | D #2320 D24S8 x4 clear/dc>ds_att clear=1.000 d-resolve | R #1886 RGBA8 133x289* #14 RGBA8 4x4 #15 RGBA8 4x4 #18 RGBA8 4x4 #1857 fmt147 2048x2048 +103
+    draws wwwwwwwwwwwwwwwwwwaawwwwwwwwwawwwwwwwawwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTWWTTWWWW
+  layout #2098 ds_att>ds_ro
+  pass 8 rp 720x1556 draws=1 ztest=0 zwrite=0 | C #2325 RGBA8 dc/STORE>color | R #2098 D24S8 720x1556* #2318 RGBA8 720x1556*
+  pass 9 rp 360x778 draws=1 ztest=0 zwrite=0 | C #2326 RGBA8 dc/STORE>color | R #2325 RGBA8 720x1556*
+  pass 10 rp 360x778 draws=1 ztest=0 zwrite=0 | C #2327 RGBA8 dc/STORE>color | R #2326 RGBA8 360x778*
+  pass 11 rp 180x389 draws=1 ztest=0 zwrite=0 | C #2308 RGBA8 dc/STORE>color | R #2326 RGBA8 360x778*
+  pass 12 rp 180x389 draws=1 ztest=0 zwrite=0 | C #2102 RGBA8 dc/STORE>color | R #2308 RGBA8 180x389*
+  pass 13 rp 720x1556 draws=1 ztest=0 zwrite=0 | C #2104 RGBA8 dc/STORE>color | R #2098 D24S8 720x1556* #2102 RGBA8 180x389* #2325 RGBA8 720x1556* #2327 RGBA8 360x778*
+  pass 14 rp 720x1556 draws=1 ztest=0 zwrite=0 | C #1918 RGBA8 dc/STORE>color | R #2104 RGBA8 720x1556*
+  pass 15 rp 720x1556 sub2 draws=2 ztest=2 zwrite=1 | C #2324 RGBA8 x4 dc/dc>color C #2318 RGBA8 dc/STORE>color C #2319 D24S8 load/STORE>ds_att | D #2320 D24S8 x4 none/none>ds_att d-resolve | R #1918 RGBA8 720x1556* #2104 RGBA8 720x1556* #2319 D24S8 720x1556*
+  pass 16 rp 291x629 draws=52 ztest=52 zwrite=0 | C #57 RGBA8 clear/STORE>color | D #58 D24S8 clear/STORE>ds_att clear=1.000 s:STORE | R #2318 RGBA8 720x1556* #56 fmt151 2048x2048 #1809 fmt151 4096x2048 #1811 fmt151 256x256 #1812 fmt151 256x128 +8
+    draws aTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTtTTTTTTTTTTT
+  pass 17 rp 291x629 draws=1 ztest=1 zwrite=0 | C #42 RGBA8 x4 clear/dc>color C #10 RGBA8 dc/STORE>color C #11 D24S8 dc/dc>ds_att | D #12 D24S8 x4 clear/dc>ds_att clear=1.000 | R #57 RGBA8 291x629*
+  submit qab90
+  pass 18 rp 291x629 draws=1 ztest=0 zwrite=0 | C #0 RGBA8 dc/STORE>present | R #10 RGBA8 291x629*
+  image #1887 D16 133x289 usage=xsrc|xdst|SAMPLED|ds mem=0
+  image #1886 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2322 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2323 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2321 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2098 D24S8 720x1556 usage=xsrc|xdst|SAMPLED|ds mem=0 game-reads=11 as combined
+  image #2319 D24S8 720x1556 usage=xsrc|xdst|SAMPLED|ds|input mem=0 game-reads=4246 as input
+  image #2320 D24S8 720x1556 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #2318 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2325 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2326 RGBA8 360x778 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2308 RGBA8 180x389 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2102 RGBA8 180x389 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2327 RGBA8 360x778 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2104 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #1918 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #58 D24S8 291x629 usage=xsrc|xdst|SAMPLED|ds mem=0
+  image #11 D24S8 291x629 usage=xsrc|xdst|SAMPLED|ds|input mem=0
+  image #12 D24S8 291x629 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #57 RGBA8 291x629 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #10 RGBA8 291x629 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  lapis: tier 2 miss 2 | D #2320 | S #0 | U pass -1 > #0 | V #0
+com.cygames.umamusume shot 3 frame 0: 61 events; calls so far rp 87002 rp2 0 rendering 0 draw 1070335 submit 11603 submit2 0 execute 0
+  submit qab90
+  dispatch x29 |
+  layout #1887 ds_ro>d_att_s_ro
+  pass 0 rp 133x289 draws=34 ztest=34 zwrite=34 | C #1886 RGBA8 clear/STORE>color | D #1887 D16 clear/STORE>d_att_s_ro clear=1.000 | R #1857 fmt147 2048x2048 #1872 fmt147 2048x2048 #1873 fmt151 1024x1024 #1874 fmt147 1024x512 +21
+    draws WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+  pass 1 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2322 RGBA8 dc/STORE>color | R #1886 RGBA8 133x289*
+  pass 2 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2323 RGBA8 dc/STORE>color | R #2322 RGBA8 133x289*
+  pass 3 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2322 RGBA8 dc/STORE>color | R #2323 RGBA8 133x289*
+  pass 4 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2321 RGBA8 dc/STORE>color | R #2322 RGBA8 133x289*
+  layout #1887 d_att_s_ro>ds_ro
+  pass 5 rp 133x289 draws=1 ztest=1 zwrite=0 | C #1886 RGBA8 dc/STORE>color | D #1887 D16 none/none>ds_ro | R #2321 RGBA8 133x289*
+  layout #2098 ds_ro>ds_att
+  pass 6 rp 720x1556 draws=38 ztest=38 zwrite=38 | | D #2098 D24S8 clear/STORE>ds_att clear=1.000 s:STORE | R #2321 RGBA8 133x289* #1891 fmt147 2048x2048 #1903 fmt147 1024x1024 #1911 fmt147 256x256 #1991 fmt147 1024x1024 +6
+    draws wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+  pass 7 rp 720x1556 draws=115 ztest=115 zwrite=75 | C #2324 RGBA8 x4 clear/dc>color C #2318 RGBA8 dc/STORE>color C #2319 D24S8 dc/STORE>ds_att | D #2320 D24S8 x4 clear/dc>ds_att clear=1.000 d-resolve | R #1886 RGBA8 133x289* #14 RGBA8 4x4 #15 RGBA8 4x4 #18 RGBA8 4x4 #1857 fmt147 2048x2048 +103
+    draws wwwwwwwwwwwwwwwwwwaawwwwwwwwwawwwwwwwawwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTWWTTWWWW
+  layout #2098 ds_att>ds_ro
+  pass 8 rp 720x1556 draws=1 ztest=0 zwrite=0 | C #2325 RGBA8 dc/STORE>color | R #2098 D24S8 720x1556* #2318 RGBA8 720x1556*
+  pass 9 rp 360x778 draws=1 ztest=0 zwrite=0 | C #2326 RGBA8 dc/STORE>color | R #2325 RGBA8 720x1556*
+  pass 10 rp 360x778 draws=1 ztest=0 zwrite=0 | C #2327 RGBA8 dc/STORE>color | R #2326 RGBA8 360x778*
+  pass 11 rp 180x389 draws=1 ztest=0 zwrite=0 | C #2308 RGBA8 dc/STORE>color | R #2326 RGBA8 360x778*
+  pass 12 rp 180x389 draws=1 ztest=0 zwrite=0 | C #2102 RGBA8 dc/STORE>color | R #2308 RGBA8 180x389*
+  pass 13 rp 720x1556 draws=1 ztest=0 zwrite=0 | C #2104 RGBA8 dc/STORE>color | R #2098 D24S8 720x1556* #2102 RGBA8 180x389* #2325 RGBA8 720x1556* #2327 RGBA8 360x778*
+  pass 14 rp 720x1556 draws=1 ztest=0 zwrite=0 | C #1918 RGBA8 dc/STORE>color | R #2104 RGBA8 720x1556*
+  pass 15 rp 720x1556 sub2 draws=2 ztest=2 zwrite=1 | C #2324 RGBA8 x4 dc/dc>color C #2318 RGBA8 dc/STORE>color C #2319 D24S8 load/STORE>ds_att | D #2320 D24S8 x4 none/none>ds_att d-resolve | R #1918 RGBA8 720x1556* #2104 RGBA8 720x1556* #2319 D24S8 720x1556*
+  pass 16 rp 291x629 draws=52 ztest=52 zwrite=0 | C #57 RGBA8 clear/STORE>color | D #58 D24S8 clear/STORE>ds_att clear=1.000 s:STORE | R #2318 RGBA8 720x1556* #56 fmt151 2048x2048 #1809 fmt151 4096x2048 #1811 fmt151 256x256 #1812 fmt151 256x128 +8
+    draws aTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTtTTTTTTTTTTT
+  pass 17 rp 291x629 draws=1 ztest=1 zwrite=0 | C #42 RGBA8 x4 clear/dc>color C #10 RGBA8 dc/STORE>color C #11 D24S8 dc/dc>ds_att | D #12 D24S8 x4 clear/dc>ds_att clear=1.000 | R #57 RGBA8 291x629*
+  submit qab90
+  pass 18 rp 291x629 draws=1 ztest=0 zwrite=0 | C #0 RGBA8 dc/STORE>present | R #10 RGBA8 291x629*
+  image #1887 D16 133x289 usage=xsrc|xdst|SAMPLED|ds mem=0
+  image #1886 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2322 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2323 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2321 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2098 D24S8 720x1556 usage=xsrc|xdst|SAMPLED|ds mem=0 game-reads=11 as combined
+  image #2319 D24S8 720x1556 usage=xsrc|xdst|SAMPLED|ds|input mem=0 game-reads=4270 as input
+  image #2320 D24S8 720x1556 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #2318 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2325 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2326 RGBA8 360x778 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2308 RGBA8 180x389 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2102 RGBA8 180x389 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2327 RGBA8 360x778 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2104 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #1918 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #58 D24S8 291x629 usage=xsrc|xdst|SAMPLED|ds mem=0
+  image #11 D24S8 291x629 usage=xsrc|xdst|SAMPLED|ds|input mem=0
+  image #12 D24S8 291x629 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #57 RGBA8 291x629 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #10 RGBA8 291x629 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  lapis: tier 2 miss 2 | D #2320 | S #0 | U pass -1 > #0 | V #0
+com.cygames.umamusume shot 3 frame 1: 61 events; calls so far rp 87021 rp2 0 rendering 0 draw 1070590 submit 11605 submit2 0 execute 0
+  submit qab90
+  dispatch x29 |
+  layout #1887 ds_ro>d_att_s_ro
+  pass 0 rp 133x289 draws=34 ztest=34 zwrite=34 | C #1886 RGBA8 clear/STORE>color | D #1887 D16 clear/STORE>d_att_s_ro clear=1.000 | R #1857 fmt147 2048x2048 #1872 fmt147 2048x2048 #1873 fmt151 1024x1024 #1874 fmt147 1024x512 +21
+    draws WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
+  pass 1 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2322 RGBA8 dc/STORE>color | R #1886 RGBA8 133x289*
+  pass 2 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2323 RGBA8 dc/STORE>color | R #2322 RGBA8 133x289*
+  pass 3 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2322 RGBA8 dc/STORE>color | R #2323 RGBA8 133x289*
+  pass 4 rp 133x289 draws=1 ztest=0 zwrite=0 | C #2321 RGBA8 dc/STORE>color | R #2322 RGBA8 133x289*
+  layout #1887 d_att_s_ro>ds_ro
+  pass 5 rp 133x289 draws=1 ztest=1 zwrite=0 | C #1886 RGBA8 dc/STORE>color | D #1887 D16 none/none>ds_ro | R #2321 RGBA8 133x289*
+  layout #2098 ds_ro>ds_att
+  pass 6 rp 720x1556 draws=38 ztest=38 zwrite=38 | | D #2098 D24S8 clear/STORE>ds_att clear=1.000 s:STORE | R #2321 RGBA8 133x289* #1891 fmt147 2048x2048 #1903 fmt147 1024x1024 #1911 fmt147 256x256 #1991 fmt147 1024x1024 +6
+    draws wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+  pass 7 rp 720x1556 draws=115 ztest=115 zwrite=75 | C #2324 RGBA8 x4 clear/dc>color C #2318 RGBA8 dc/STORE>color C #2319 D24S8 dc/STORE>ds_att | D #2320 D24S8 x4 clear/dc>ds_att clear=1.000 d-resolve | R #1886 RGBA8 133x289* #14 RGBA8 4x4 #15 RGBA8 4x4 #18 RGBA8 4x4 #1857 fmt147 2048x2048 +103
+    draws wwwwwwwwwwwwwwwwwwaawwwwwwwwwawwwwwwwawwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTWWTTWWWW
+  layout #2098 ds_att>ds_ro
+  pass 8 rp 720x1556 draws=1 ztest=0 zwrite=0 | C #2325 RGBA8 dc/STORE>color | R #2098 D24S8 720x1556* #2318 RGBA8 720x1556*
+  pass 9 rp 360x778 draws=1 ztest=0 zwrite=0 | C #2326 RGBA8 dc/STORE>color | R #2325 RGBA8 720x1556*
+  pass 10 rp 360x778 draws=1 ztest=0 zwrite=0 | C #2327 RGBA8 dc/STORE>color | R #2326 RGBA8 360x778*
+  pass 11 rp 180x389 draws=1 ztest=0 zwrite=0 | C #2102 RGBA8 dc/STORE>color | R #2326 RGBA8 360x778*
+  pass 12 rp 180x389 draws=1 ztest=0 zwrite=0 | C #2308 RGBA8 dc/STORE>color | R #2102 RGBA8 180x389*
+  pass 13 rp 720x1556 draws=1 ztest=0 zwrite=0 | C #2104 RGBA8 dc/STORE>color | R #2098 D24S8 720x1556* #2308 RGBA8 180x389* #2325 RGBA8 720x1556* #2327 RGBA8 360x778*
+  pass 14 rp 720x1556 draws=1 ztest=0 zwrite=0 | C #1918 RGBA8 dc/STORE>color | R #2104 RGBA8 720x1556*
+  pass 15 rp 720x1556 sub2 draws=2 ztest=2 zwrite=1 | C #2324 RGBA8 x4 dc/dc>color C #2318 RGBA8 dc/STORE>color C #2319 D24S8 load/STORE>ds_att | D #2320 D24S8 x4 none/none>ds_att d-resolve | R #1918 RGBA8 720x1556* #2104 RGBA8 720x1556* #2319 D24S8 720x1556*
+  pass 16 rp 291x629 draws=52 ztest=52 zwrite=0 | C #57 RGBA8 clear/STORE>color | D #58 D24S8 clear/STORE>ds_att clear=1.000 s:STORE | R #2318 RGBA8 720x1556* #56 fmt151 2048x2048 #1809 fmt151 4096x2048 #1811 fmt151 256x256 #1812 fmt151 256x128 +8
+    draws aTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTtTTTTTTTTTTT
+  pass 17 rp 291x629 draws=1 ztest=1 zwrite=0 | C #42 RGBA8 x4 clear/dc>color C #10 RGBA8 dc/STORE>color C #11 D24S8 dc/dc>ds_att | D #12 D24S8 x4 clear/dc>ds_att clear=1.000 | R #57 RGBA8 291x629*
+  submit qab90
+  pass 18 rp 291x629 draws=1 ztest=0 zwrite=0 | C #0 RGBA8 dc/STORE>present | R #10 RGBA8 291x629*
+  image #1887 D16 133x289 usage=xsrc|xdst|SAMPLED|ds mem=0
+  image #1886 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2322 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2323 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2321 RGBA8 133x289 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2098 D24S8 720x1556 usage=xsrc|xdst|SAMPLED|ds mem=0 game-reads=11 as combined
+  image #2319 D24S8 720x1556 usage=xsrc|xdst|SAMPLED|ds|input mem=0 game-reads=4272 as input
+  image #2320 D24S8 720x1556 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #2318 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2325 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2326 RGBA8 360x778 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2102 RGBA8 180x389 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2308 RGBA8 180x389 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2327 RGBA8 360x778 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #2104 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #1918 RGBA8 720x1556 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #58 D24S8 291x629 usage=xsrc|xdst|SAMPLED|ds mem=0
+  image #11 D24S8 291x629 usage=xsrc|xdst|SAMPLED|ds|input mem=0
+  image #12 D24S8 291x629 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #57 RGBA8 291x629 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  image #10 RGBA8 291x629 usage=xsrc|xdst|SAMPLED|color|input mem=0
+  lapis: tier 2 miss 2 | D #2320 | S #0 | U pass -1 > #0 | V #0

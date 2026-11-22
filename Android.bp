@@ -1,0 +1,400 @@
+// SPDX-FileCopyrightText: IRedDragonICY
+// SPDX-License-Identifier: LicenseRef-IRedDragonICY-NC-1.0
+
+package {
+    default_applicable_licenses: ["framefx_license"],
+}
+
+license_kind {
+    name: "framefx_noncommercial_copyleft",
+    conditions: [
+        "restricted",
+        "proprietary",
+    ],
+}
+
+license {
+    name: "framefx_license",
+    visibility: [":__subpackages__"],
+    license_kinds: [
+        "framefx_noncommercial_copyleft",
+        "SPDX-license-identifier-BSD-3-Clause",
+    ],
+    license_text: [
+        "LICENSE",
+        "luwes/shaders/SGSR-LICENSE.txt",
+    ],
+}
+
+// Hook ABI and channel layout: all the graphics loaders compile against.
+cc_library_headers {
+    name: "libframefx_headers",
+    host_supported: true,
+    export_include_dirs: ["include"],
+    header_libs: [
+        "gl_headers",
+        "vulkan_headers",
+    ],
+    export_header_lib_headers: [
+        "gl_headers",
+        "vulkan_headers",
+    ],
+}
+
+cc_defaults {
+    name: "framefx_defaults",
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wextra",
+        "-Wthread-safety",
+        "-fvisibility=hidden",
+    ],
+    local_include_dirs: ["."],
+    header_libs: ["libframefx_headers"],
+}
+
+genrule {
+    name: "framefx_shader_sources",
+    srcs: ["luwes/shaders/*.vert", "luwes/shaders/*.frag", "luwes/shaders/*.comp"],
+    out: ["framefx_shader_sources.h"],
+    tool_files: ["tools/embed_shaders.sh"],
+    cmd: "bash $(location tools/embed_shaders.sh) $(out) framefx::luwes::source $(in)",
+}
+
+genrule {
+    name: "framefx_kelir_shader_sources",
+    srcs: ["kelir/shaders/*.glsl", "kelir/shaders/*.frag"],
+    out: ["framefx_kelir_shader_sources.h"],
+    tool_files: ["tools/embed_shaders.sh"],
+    cmd: "bash $(location tools/embed_shaders.sh) $(out) framefx::kelir::source $(in)",
+}
+
+// Lapis's classifier and tracker (C ABI in lapis/rust/src/ffi.rs, bridged by lapis/classifier.cpp).
+rust_ffi_static {
+    name: "liblapis_rs",
+    crate_name: "lapis",
+    host_supported: true,
+    srcs: ["lapis/rust/src/lib.rs"],
+    edition: "2021",
+}
+
+// Kelir's logic: kinds, section codec, colour band and LUT bake, plans, controller (C ABI in
+// kelir/rust/src/ffi.rs, called by the kelir/*.cpp shims).
+rust_ffi_static {
+    name: "libkelir_rs",
+    crate_name: "kelir",
+    host_supported: true,
+    srcs: ["kelir/rust/src/lib.rs"],
+    edition: "2021",
+}
+
+rust_test_host {
+    name: "kelir_rs_test",
+    crate_name: "kelir",
+    srcs: ["kelir/rust/src/lib.rs"],
+    edition: "2021",
+    test_suites: ["general-tests"],
+}
+
+// The classifier's, G-buffer scorer's and engine signals' own tests (lapis/rust).
+rust_test_host {
+    name: "lapis_rs_test",
+    crate_name: "lapis",
+    srcs: ["lapis/rust/src/lib.rs"],
+    edition: "2021",
+    test_suites: ["general-tests"],
+}
+
+// Pacing, channel decoding, target lifecycle and Kelir's plans and shader sources: no graphics
+// API, tested on the host.
+cc_library_static {
+    name: "libframefx_control",
+    defaults: ["framefx_defaults"],
+    host_supported: true,
+    srcs: [
+        "kelir/colour.cpp",
+        "kelir/controller.cpp",
+        "kelir/lut.cpp",
+        "kelir/params.cpp",
+        "kelir/plan.cpp",
+        "kelir/section.cpp",
+        "kelir/shaders.cpp",
+        "lapis/classifier.cpp",
+        "lapis/hud.cpp",
+        "lapis/projection.cpp",
+        "lapis/signals.cpp",
+        "luwes/gbuffer.cpp",
+        "luwes/pacer.cpp",
+        "src/channel.cpp",
+        "src/target.cpp",
+        "src/texture.cpp",
+        "video/timeline.cpp",
+    ],
+    generated_headers: [
+        "framefx_kelir_shader_sources",
+        "framefx_shader_sources",
+    ],
+    export_generated_headers: ["framefx_kelir_shader_sources"],
+    whole_static_libs: [
+        "libkelir_rs",
+        "liblapis_rs",
+    ],
+    export_include_dirs: ["."],
+    export_header_lib_headers: ["libframefx_headers"],
+}
+
+// The engine, apart from the library that ships it, so the device test drives the same code.
+cc_library_static {
+    name: "libframefx_engine",
+    defaults: ["framefx_defaults"],
+    srcs: [
+        "kelir/gles.cpp",
+        "kelir/vulkan.cpp",
+        "lapis/hud_probe.cpp",
+        "lapis/recorder.cpp",
+        "luwes/afme.cpp",
+        "luwes/capture.cpp",
+        "luwes/gles.cpp",
+        "luwes/shaders.cpp",
+        "luwes/vulkan.cpp",
+        "src/engine.cpp",
+        "src/entry.cpp",
+        "src/extensions.cpp",
+        "src/gl_extras.cpp",
+        "src/gles.cpp",
+        "src/rays.cpp",
+        "src/resume.cpp",
+        "src/safety.cpp",
+        "src/shading.cpp",
+        "src/survey.cpp",
+        "src/vulkan.cpp",
+        "video/afme_engine.cpp",
+        "video/gpu.cpp",
+        "video/motion.cpp",
+        "video/proxy.cpp",
+    ],
+    cflags: ["-DVK_USE_PLATFORM_ANDROID_KHR"],
+    generated_headers: ["framefx_shader_sources"],
+    static_libs: ["libframefx_control"],
+    shared_libs: [
+        "libandroid_runtime",
+        "libbase",
+        "libbinder",
+        "libgui",
+        "liblog",
+        "libnativedisplay",
+        "libnativehelper",
+        "libnativewindow",
+        "libui",
+        "libutils",
+        "libvulkan",
+    ],
+    header_libs: [
+        "libarect_headers",
+        "libnativebase_headers",
+        "libnativewindow_headers",
+    ],
+}
+
+// Only the graphics loaders of an armed process load it, by name.
+cc_library_shared {
+    name: "libframefx",
+    defaults: ["framefx_defaults"],
+    system_ext_specific: true,
+    required: ["lepasd"],
+    whole_static_libs: [
+        "libframefx_control",
+        "libframefx_engine",
+    ],
+    shared_libs: [
+        "libandroid_runtime",
+        "libbase",
+        "libbinder",
+        "libgui",
+        "liblog",
+        "libnativedisplay",
+        "libnativehelper",
+        "libnativewindow",
+        "libui",
+        "libutils",
+        "libvulkan",
+    ],
+}
+
+cc_test_host {
+    name: "framefx_host_test",
+    defaults: ["framefx_defaults"],
+    srcs: [
+        "tests/host/channel_test.cpp",
+        "tests/host/gbuffer_test.cpp",
+        "tests/host/lapis_region_test.cpp",
+        "tests/host/luwes_orientation_test.cpp",
+        "tests/host/luwes_resize_test.cpp",
+        "tests/host/pacer_test.cpp",
+        "tests/host/target_test.cpp",
+        "tests/host/texture_test.cpp",
+        "tests/host/video_timeline_test.cpp",
+    ],
+    static_libs: ["libframefx_control"],
+    test_options: {
+        unit_test: true,
+    },
+}
+
+// Kelir's sections, plans, LUT and shader sources, held to the golden files and the CPU
+// reference renderer.
+cc_test_host {
+    name: "framefx_kelir_host_test",
+    defaults: ["framefx_defaults"],
+    srcs: [
+        "tests/host/kelir_controller_test.cpp",
+        "tests/host/kelir_layout_test.cpp",
+        "tests/host/kelir_live_test.cpp",
+        "tests/host/kelir_lut_test.cpp",
+        "tests/host/kelir_plan_test.cpp",
+        "tests/host/kelir_scheduler_test.cpp",
+        "tests/host/kelir_section_test.cpp",
+        "tests/host/kelir_shaders_test.cpp",
+        "tests/parity/kelir_legacy/colour.cpp",
+        "tests/parity/kelir_legacy/lut.cpp",
+        "tests/parity/kelir_legacy/params.cpp",
+        "tests/parity/kelir_legacy/plan.cpp",
+        "tests/parity/kelir_legacy/section.cpp",
+        "tests/parity/kelir_parity_test.cpp",
+        "tests/ref/kelir_ref.cpp",
+    ],
+    static_libs: [
+        "libframefx_control",
+        "libjsoncpp",
+    ],
+    data: ["tests/golden/**/*"],
+    test_suites: ["general-tests"],
+    test_options: {
+        unit_test: true,
+    },
+}
+
+// Lapis's classifier against the frame graphs the survey recorded in games, and the projection
+// finder.
+cc_test_host {
+    name: "framefx_lapis_host_test",
+    defaults: ["framefx_defaults"],
+    srcs: [
+        "tests/host/lapis_classifier_test.cpp",
+        "tests/host/lapis_hud_test.cpp",
+        "tests/host/lapis_projection_test.cpp",
+        "tests/host/lapis_signals_test.cpp",
+    ],
+    static_libs: ["libframefx_control"],
+    data: ["tests/fixtures/lapis/*"],
+    test_suites: ["general-tests"],
+    test_options: {
+        unit_test: true,
+    },
+}
+
+cc_fuzz {
+    name: "kelir_section_fuzzer",
+    defaults: ["framefx_defaults"],
+    host_supported: true,
+    srcs: ["tests/fuzz/kelir_section_fuzzer.cpp"],
+    static_libs: ["libframefx_control"],
+    corpus: ["tests/golden/kelir/*.bin"],
+}
+
+// Luwes on this device's GPU: GLES and Vulkan, both modes, into an in-process image queue.
+cc_test {
+    name: "framefx_device_test",
+    defaults: ["framefx_defaults"],
+    cflags: ["-DVK_USE_PLATFORM_ANDROID_KHR"],
+    srcs: [
+        "tests/device/arming_test.cpp",
+        "tests/device/harness.cpp",
+        "tests/device/kelir_test.cpp",
+        "tests/device/luwes_test.cpp",
+        "tests/ref/kelir_ref.cpp",
+    ],
+    data_bins: ["framefx_arming_probe"],
+    static_libs: [
+        "libframefx_control",
+        "libframefx_engine",
+    ],
+    shared_libs: [
+        "libandroid_runtime",
+        "libEGL",
+        "libGLESv3",
+        "libbase",
+        "libbinder",
+        "libgui",
+        "liblog",
+        "libmediandk",
+        "libnativedisplay",
+        "libnativehelper",
+        "libnativewindow",
+        "libui",
+        "libutils",
+        "libvulkan",
+    ],
+    compile_multilib: "64",
+    test_suites: ["device-tests"],
+}
+
+// A fresh process for FramefxArming: brings up EGL and Vulkan as a given uid.
+cc_binary {
+    name: "framefx_arming_probe",
+    defaults: ["framefx_defaults"],
+    srcs: ["tests/device/arming_probe.cpp"],
+    shared_libs: [
+        "libEGL",
+        "libvulkan",
+    ],
+}
+
+// Lepas: finds an armed game's fps cap from outside the game and holds it at the panel's rate.
+rust_binary {
+    name: "lepasd",
+    crate_name: "lepasd",
+    crate_root: "lepas/src/main.rs",
+    srcs: [
+        "lepas/src/core.rs",
+        "lepas/src/main.rs",
+    ],
+    edition: "2021",
+    init_rc: ["lepas/lepasd.rc"],
+    shared_libs: ["liblog"],
+    prefer_rlib: true,
+}
+
+// lepasd's decisions (forms, cap detection, probe and hold verdicts, maps, scan, fingerprints,
+// cache, start property) on the host.
+rust_test_host {
+    name: "lepasd_core_test",
+    crate_name: "lepasd_core",
+    crate_root: "lepas/src/core.rs",
+    srcs: ["lepas/src/core.rs"],
+    edition: "2021",
+    test_suites: ["general-tests"],
+}
+
+// Luwes colour-only frame generation in Rust: block matcher, residual-layer field, the block-warp
+// and dense-flow solvers, fusion record / blend with a net slot (block-warp output without a model).
+// Not wired into the engine yet; the shipping path is luwes/*.cpp.
+rust_library {
+    name: "libluwes_fg",
+    crate_name: "luwes_fg",
+    host_supported: true,
+    srcs: ["luwes/rust/src/lib.rs"],
+    edition: "2021",
+}
+
+// The port against the Python reference's outputs (lab/luwes/framefx_golden/dump.py --small).
+rust_test_host {
+    name: "luwes_fg_golden_test",
+    crate_name: "luwes_fg_golden",
+    srcs: ["luwes/rust/tests/golden.rs"],
+    rustlibs: ["libluwes_fg"],
+    edition: "2021",
+    data: ["tests/golden/luwes/**/*"],
+    test_suites: ["general-tests"],
+}

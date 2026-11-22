@@ -1,0 +1,62 @@
+survey: shot 1
+com.roblox.client shot 1 frame 0: 21 events; calls so far rp 108611 rp2 0 rendering 0 draw 6919404 submit 20066 submit2 0 execute 0
+  submit q7cd0
+  pass 0 rp 128x128 vp 42x42@0,0 draws=1 ztest=1 zwrite=1 | C #584 RGBA8 x4 clear/dc>color C #586 RGBA8 dc/STORE>shader_ro | D #583 D32F x4 clear/dc>ds_att clear=0.000 | R #323 RGBA8 1x1 #335 RGBA8 1x1 #338 RGBA8 1x1 #339 RGBA8 1x1 +3
+  pass 1 rp 42x42 vp 42x42@0,0 draws=1 ztest=0 zwrite=0 | C #665 RGBA8 dc/STORE>shader_ro | R #586 RGBA8 128x128* #323 RGBA8 1x1 #325 RGBA8 1x1 #335 RGBA8 1x1 #338 RGBA8 1x1 +3
+  dispatch x1 | #374 R8 2048x4096 #511 fmt75 2048x364 #572 fmt99 28x13
+  pass 2 rp 1144x2479 vp 904x1959@0,0 draws=104 ztest=104 zwrite=22 | C #506 RGB10A2 x4 clear/dc>color C #507 RGB10A2 dc/STORE>shader_ro | D #505 D32F x4 clear/dc>ds_att clear=0.000 | R #81 #323 RGBA8 1x1 #325 RGBA8 1x1 #334 RGBA8 1x1 +41
+    draws wwwwwwwwwwwwwwwwwwwwwwtttTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT
+  pass 3 rp 1280x2772 vp 1280x2772@0,0 draws=227 ztest=0 zwrite=0 | C #0 RGBA8 dc/STORE>color | R #507 RGB10A2 1144x2479* #665 RGBA8 42x42* #323 RGBA8 1x1 #325 RGBA8 1x1 #364 RGBA8 128x128 #365 RG8 128x128 +150
+    draws aAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+  image #583 D32F 128x128 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #586 RGBA8 128x128 usage=xsrc|xdst|SAMPLED|color mem=0
+  image #505 D32F 1144x2479 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #507 RGB10A2 1144x2479 usage=xsrc|xdst|SAMPLED|color mem=0
+  image #665 RGBA8 42x42 usage=xsrc|xdst|SAMPLED|color mem=0
+  lapis: tier 2 miss 0 | D #505 | S #507 | U pass 3 > #0 | V #0
+com.roblox.client shot 1 frame 1: 14 events; calls so far rp 108615 rp2 0 rendering 0 draw 6919737 submit 20067 submit2 0 execute 0
+  submit q7cd0
+  pass 0 rp 128x128 vp 41x41@0,0 draws=1 ztest=1 zwrite=1 | C #584 RGBA8 x4 clear/dc>color C #586 RGBA8 dc/STORE>shader_ro | D #583 D32F x4 clear/dc>ds_att clear=0.000 | R #323 RGBA8 1x1 #335 RGBA8 1x1 #338 RGBA8 1x1 #339 RGBA8 1x1 +3
+  pass 1 rp 41x41 vp 41x41@0,0 draws=1 ztest=0 zwrite=0 | C #666 RGBA8 dc/STORE>shader_ro | R #586 RGBA8 128x128* #511 fmt75 2048x364
+  dispatch x1 | #334 RGBA8 1x1 #364 RGBA8 128x128 #365 RG8 128x128 #374 R8 2048x4096 +2
+  pass 2 rp 1144x2479 vp 904x1959@0,0 draws=104 ztest=104 zwrite=22 | C #506 RGB10A2 x4 clear/dc>color C #507 RGB10A2 dc/STORE>shader_ro | D #505 D32F x4 clear/dc>ds_att clear=0.000 | R #81 #323 RGBA8 1x1 #324 RGBA8 1x1 #325 RGBA8 1x1 +46
+    draws wwwwwwwwwwwwwwwwwwwwwwtttTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT
+  pass 3 rp 1280x2772 vp 1280x2772@0,0 draws=227 ztest=0 zwrite=0 | C #0 RGBA8 dc/STORE>color | R #507 RGB10A2 1144x2479* #666 RGBA8 41x41* #323 RGBA8 1x1 #325 RGBA8 1x1 #326 RGBA8 1x1 #364 RGBA8 128x128 +152
+    draws aAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+  image #583 D32F 128x128 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #586 RGBA8 128x128 usage=xsrc|xdst|SAMPLED|color mem=0
+  image #505 D32F 1144x2479 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #507 RGB10A2 1144x2479 usage=xsrc|xdst|SAMPLED|color mem=0
+  image #666 RGBA8 41x41 usage=xsrc|xdst|SAMPLED|color mem=0
+  lapis: tier 2 miss 0 | D #505 | S #507 | U pass 3 > #0 | V #0
+survey: shot 2
+com.roblox.client shot 2 frame 0: 21 events; calls so far rp 108619 rp2 0 rendering 0 draw 6920070 submit 20068 submit2 0 execute 0
+  submit q7cd0
+  pass 0 rp 128x128 vp 42x42@0,0 draws=1 ztest=1 zwrite=1 | C #584 RGBA8 x4 clear/dc>color C #586 RGBA8 dc/STORE>shader_ro | D #583 D32F x4 clear/dc>ds_att clear=0.000 | R #323 RGBA8 1x1 #335 RGBA8 1x1 #338 RGBA8 1x1 #339 RGBA8 1x1 +3
+  pass 1 rp 42x42 vp 42x42@0,0 draws=1 ztest=0 zwrite=0 | C #667 RGBA8 dc/STORE>shader_ro | R #586 RGBA8 128x128* #323 RGBA8 1x1 #325 RGBA8 1x1 #335 RGBA8 1x1 #338 RGBA8 1x1 +3
+  dispatch x1 | #374 R8 2048x4096 #511 fmt75 2048x364 #572 fmt99 28x13
+  pass 2 rp 1144x2479 vp 904x1959@0,0 draws=104 ztest=104 zwrite=22 | C #506 RGB10A2 x4 clear/dc>color C #507 RGB10A2 dc/STORE>shader_ro | D #505 D32F x4 clear/dc>ds_att clear=0.000 | R #81 #323 RGBA8 1x1 #325 RGBA8 1x1 #334 RGBA8 1x1 +41
+    draws wwwwwwwwwwwwwwwwwwwwwwtttTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT
+  pass 3 rp 1280x2772 vp 1280x2772@0,0 draws=227 ztest=0 zwrite=0 | C #0 RGBA8 dc/STORE>color | R #507 RGB10A2 1144x2479* #667 RGBA8 42x42* #323 RGBA8 1x1 #325 RGBA8 1x1 #364 RGBA8 128x128 #365 RG8 128x128 +150
+    draws aAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+  image #583 D32F 128x128 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #586 RGBA8 128x128 usage=xsrc|xdst|SAMPLED|color mem=0
+  image #505 D32F 1144x2479 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #507 RGB10A2 1144x2479 usage=xsrc|xdst|SAMPLED|color mem=0
+  image #667 RGBA8 42x42 usage=xsrc|xdst|SAMPLED|color mem=0
+  lapis: tier 2 miss 0 | D #505 | S #507 | U pass 3 > #0 | V #0
+com.roblox.client shot 2 frame 1: 14 events; calls so far rp 108623 rp2 0 rendering 0 draw 6920403 submit 20069 submit2 0 execute 0
+  submit q7cd0
+  pass 0 rp 128x128 vp 41x41@0,0 draws=1 ztest=1 zwrite=1 | C #584 RGBA8 x4 clear/dc>color C #586 RGBA8 dc/STORE>shader_ro | D #583 D32F x4 clear/dc>ds_att clear=0.000 | R #323 RGBA8 1x1 #335 RGBA8 1x1 #338 RGBA8 1x1 #339 RGBA8 1x1 +3
+  pass 1 rp 41x41 vp 41x41@0,0 draws=1 ztest=0 zwrite=0 | C #668 RGBA8 dc/STORE>shader_ro | R #586 RGBA8 128x128* #511 fmt75 2048x364
+  dispatch x1 | #334 RGBA8 1x1 #364 RGBA8 128x128 #365 RG8 128x128 #374 R8 2048x4096 +2
+  pass 2 rp 1144x2479 vp 904x1959@0,0 draws=104 ztest=104 zwrite=22 | C #506 RGB10A2 x4 clear/dc>color C #507 RGB10A2 dc/STORE>shader_ro | D #505 D32F x4 clear/dc>ds_att clear=0.000 | R #81 #323 RGBA8 1x1 #324 RGBA8 1x1 #325 RGBA8 1x1 +46
+    draws wwwwwwwwwwwwwwwwwwwwwwtttTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT
+  pass 3 rp 1280x2772 vp 1280x2772@0,0 draws=227 ztest=0 zwrite=0 | C #0 RGBA8 dc/STORE>color | R #507 RGB10A2 1144x2479* #668 RGBA8 41x41* #323 RGBA8 1x1 #325 RGBA8 1x1 #326 RGBA8 1x1 #364 RGBA8 128x128 +152
+    draws aAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+  image #583 D32F 128x128 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #586 RGBA8 128x128 usage=xsrc|xdst|SAMPLED|color mem=0
+  image #505 D32F 1144x2479 x4 usage=ds|TRANSIENT mem=8 LAZY
+  image #507 RGB10A2 1144x2479 usage=xsrc|xdst|SAMPLED|color mem=0
+  image #668 RGBA8 41x41 usage=xsrc|xdst|SAMPLED|color mem=0
+  lapis: tier 2 miss 0 | D #505 | S #507 | U pass 3 > #0 | V #0

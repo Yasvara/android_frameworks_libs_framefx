@@ -1,0 +1,146 @@
+IRedDragonICY Noncommercial Copyleft License, version 1.0
+SPDX-License-Identifier: LicenseRef-IRedDragonICY-NC-1.0
+
+Copyright (c) IRedDragonICY. All rights reserved except as granted below.
+
+This is a source-available license. It is NOT the GNU GPL or any other
+OSI-approved open-source license. Commercial Use is not permitted without a
+separate paid license from the Licensor.
+
+1. Definitions
+
+  "Licensor" means IRedDragonICY, the copyright holder.
+
+  "Software" means the source code, shaders, data, documentation and build
+  files distributed with this License, and any compiled form of them.
+
+  "Derivative Work" means any work that contains, is based on, links to, or
+  is compiled from all or part of the Software, including modified versions
+  and ports to other languages.
+
+  "Commercial Use" means any use of the Software or a Derivative Work that is
+  intended for, or directed toward, commercial advantage or monetary
+  compensation, directly or indirectly. It includes, without limitation:
+    (a) selling, renting or licensing the Software or a Derivative Work, or
+        any product, firmware, ROM, app or device that contains it;
+    (b) pre-installing, bundling or shipping it on devices by a manufacturer,
+        OEM, ODM, carrier, retailer, reseller or refurbisher;
+    (c) making access to it conditional on payment, including paid builds,
+        subscriptions, paywalls, donation-gated or early-access builds,
+        Patreon/membership tiers, or paid support tied to it;
+    (d) using it to earn advertising, sponsorship or affiliate revenue,
+        including ad-supported apps or download pages that serve it;
+    (e) offering it, or functionality derived from it, as a hosted or
+        cloud service for which any party pays;
+    (f) any use by or on behalf of a for-profit company in its products,
+        services or internal production work.
+  Accepting voluntary donations that do not condition, prioritise or unlock
+  access to the Software is not, by itself, Commercial Use.
+
+  "Noncommercial Use" means any use that is not Commercial Use, such as
+  personal use on your own devices, study, research, teaching, and free
+  community projects.
+
+2. Noncommercial grant
+
+  Subject to this License, the Licensor grants you a worldwide,
+  royalty-free, non-exclusive, non-transferable license to use, copy,
+  modify, and distribute the Software and Derivative Works, solely for
+  Noncommercial Use and subject to section 3.
+
+3. Prohibited uses
+
+  No license is granted, even for Noncommercial Use, to use, modify, or
+  distribute the Software or any Derivative Work to:
+    (a) create, support, or distribute game cheats or unfair gameplay
+        modifications, including wallhacks, chams, ESP or world-to-screen
+        overlays, aimbots, triggerbots, occlusion or smoke/foliage removal,
+        or automated gameplay bots;
+    (b) scan, read, or write process memory to alter gameplay state, speed,
+        timers, cooldowns, or game logic beyond the display frame-rate cap
+        holding in lepas;
+    (c) bypass, hide from, disable, or spoof anti-cheat, anti-tamper, or
+        client-integrity checks.
+  Any breach of this section terminates all rights under this License
+  immediately with no cure period.
+
+4. Copyleft
+
+  If you distribute the Software or a Derivative Work, in source or compiled
+  form, you must:
+    (a) license the whole of it under this same License, unmodified, and
+        include a copy of this License;
+    (b) make the complete corresponding source code available, free of
+        charge, to everyone who receives it;
+    (c) keep all copyright, license, SPDX and attribution notices and
+        original version-control (git) commit authorship intact, not
+        misrepresent the origin of the Software by re-authoring, squashing
+        away authorship or rebranding it as your own work, and state
+        clearly what you changed and when;
+    (d) not impose any further restrictions on recipients' exercise of the
+        rights granted here.
+
+5. Notice to the Licensor
+
+  Before you publicly distribute the Software or a Derivative Work, or use
+  it in any project made available to others, you must notify the Licensor,
+  identifying the project, where it is distributed, and how the Software is
+  used. Private use on your own devices requires no notice.
+
+6. Commercial Use
+
+  Commercial Use requires a separate written commercial license from the
+  Licensor, obtained before any Commercial Use begins. Fees are set by the
+  Licensor according to the scope of use, such as number of devices or
+  users, distribution, and revenue. Contact the Licensor to request one.
+  No commercial rights are granted by this License, by implication,
+  estoppel or otherwise.
+
+7. Patents
+
+  The Licensor grants you a license, for Noncommercial Use only, under any
+  patent claims the Licensor can license that are necessarily infringed by
+  the Software as provided. This patent license ends automatically if you
+  bring a patent claim alleging that the Software infringes a patent.
+
+8. Third-party components
+
+  Files that carry their own copyright and license notices (for example the
+  Qualcomm Snapdragon Game Super Resolution shaders under the BSD 3-Clause
+  license in luwes/shaders/SGSR-LICENSE.txt) remain under those licenses.
+  This License does not restrict rights those licenses give you in those
+  files.
+
+9. Trademarks
+
+  This License grants no right to use the names "IRedDragonICY" or
+  "Yasvara", or any associated logos, except to make the notices required
+  in section 4.
+
+10. Termination
+
+  Your rights under this License end automatically if you breach it. Except
+  for a breach of section 3 or section 6, if you stop the breach and it is
+  your first, your rights are reinstated if you cure it within 30 days of
+  learning of it. Otherwise, reinstatement requires the Licensor's written
+  consent. Commercial Use without a commercial license, or any breach of
+  section 3, is not curable without the Licensor's written consent.
+
+11. No warranty
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+  NON-INFRINGEMENT.
+
+12. Limitation of liability
+
+  TO THE EXTENT PERMITTED BY LAW, THE LICENSOR SHALL NOT BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM, OUT OF, OR IN CONNECTION
+  WITH THE SOFTWARE OR ITS USE, INCLUDING DAMAGE TO DEVICES OR DATA.
+
+13. General
+
+  If any provision is held unenforceable, the rest remains in effect. The
+  Licensor may publish revised versions of this License. You may use the
+  Software under the version it was distributed with or, at your choice, any
+  later version published by the Licensor.

@@ -1,0 +1,19 @@
+{
+  "presubmit": [
+    {
+      "name": "framefx_host_test",
+      "host": true
+    },
+    {
+      "name": "framefx_kelir_host_test",
+      "host": true
+    },
+    {
+      "name": "framefx_lapis_host_test",
+      "host": true
+    },
+    {
+      "name": "framefx_device_test"
+    }
+  ]
+}

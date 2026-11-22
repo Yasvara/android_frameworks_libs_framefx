@@ -1,0 +1,41 @@
+com.garena.game.df shot 2 frame 0: 33 events; calls so far rp 63024 rp2 0 rendering 0 draw 428948 submit 6392 submit2 0 execute 0
+  projections: 1 distinct in 84 of 84 MB mapped, 98.4 ms
+  near-identity x4: 1.00000 -0.00000 -0.00000 0.00011 -0.00000 1.00000 -0.00000 -0.00005 -0.00000 0.00000 1.00000 0.00005 -0.00000 0.00000 0.00000 1.00000
+  near-identity x2: 1.00000 0.00000 0.00000 -0.00001 0.00000 1.00000 -0.00000 -0.00001 0.00000 -0.00000 1.00000 -0.00002 -0.00000 0.00000 0.00000 1.00000
+  near-identity x11: 1.00000 0.00000 0.00000 0.00000 0.00000 1.00000 0.00000 -0.00001 -0.00000 0.00000 1.00000 0.00005 -0.00000 0.00000 0.00000 1.00000
+  proj x21 col fovY=121.3 aspect=0.462 jitter=(0.00000,0.00000) a=0.000000 b=1.000000 w=+1 | reversed: near=1.0000 far=inf | mem type 6
+  submit qab10
+  pass 0 rp 68x146 draws=1 ztest=0 zwrite=0 | C #422 R32UI clear/STORE>color
+  layout #444 shader_ro>color
+  layout #423 shader_ro>color
+  pass 1 rp 1080x2336 sub2 draws=173 ztest=173 zwrite=163 | C #1542 R11G11B10F x4 clear/dc>color C #1543 R11G11B10F clear/STORE>color | D #1544 D24S8 x4 clear/dc>ds_att clear=0.000 d-as-input | R #5 BGRA8 1x1 #6 BGRA8 1x1 #8 BGRA8 1x1 #424 fmt109 1x1 +230
+  pass 2 rp 270x584 draws=1 ztest=0 zwrite=0 | C #444 R16F clear/STORE>color | R #1543 R11G11B10F 1080x2336*
+  layout #444 color>shader_ro
+  layout #423 color>shader_ro
+  dispatch x2 | #423 R16F 270x584
+  dispatch x1 | #412 fmt109 1x1 #424 fmt109 1x1
+  pass 3 rp 1080x2336 draws=22 ztest=0 zwrite=0 | C #0 RGB10A2 clear/STORE>color | R #1543 R11G11B10F 1080x2336* #132 fmt158 504x816 #214 RGBA16F 32x32 #367 R8 2048x2048 #390 fmt158 1528x1536 +5
+  image #444 R16F 270x584 usage=xsrc|xdst|SAMPLED|color mem=0 game-reads=1 as combined
+  image #423 R16F 270x584 usage=xsrc|xdst|SAMPLED|color mem=0 game-reads=1 as combined
+  image #1544 D24S8 1080x2336 x4 usage=ds|TRANSIENT|input mem=8 LAZY game-reads=4 as input
+  image #1543 R11G11B10F 1080x2336 usage=xsrc|xdst|SAMPLED|color mem=0
+  lapis: tier 2 miss 6 | D #1544 | S #0 | U pass -1 > #0 | V #0
+com.garena.game.df shot 2 frame 1: 43 events; calls so far rp 63043 rp2 0 rendering 0 draw 429161 submit 6394 submit2 0 execute 0
+  submit qab10
+  submit qab10
+  pass 0 rp 1000x360 draws=1 ztest=0 zwrite=0 | C #1541 BGRA8_SRGB clear/STORE>color | R #1848 R8 1024x368 #1849 R8 512x184 #1850 R8 512x184
+  pass 1 rp 68x146 draws=1 ztest=0 zwrite=0 | C #422 R32UI clear/STORE>color
+  layout #444 shader_ro>color
+  layout #423 shader_ro>color
+  pass 2 rp 1080x2336 sub2 draws=173 ztest=173 zwrite=163 | C #1542 R11G11B10F x4 clear/dc>color C #1543 R11G11B10F clear/STORE>color | D #1544 D24S8 x4 clear/dc>ds_att clear=0.000 d-as-input | R #5 BGRA8 1x1 #6 BGRA8 1x1 #8 BGRA8 1x1 #412 fmt109 1x1 +230
+  pass 3 rp 270x584 draws=1 ztest=0 zwrite=0 | C #423 R16F clear/STORE>color | R #1543 R11G11B10F 1080x2336*
+  layout #423 color>shader_ro
+  layout #444 color>shader_ro
+  dispatch x2 | #444 R16F 270x584
+  dispatch x1 | #412 fmt109 1x1 #424 fmt109 1x1
+  pass 4 rp 1080x2336 draws=22 ztest=0 zwrite=0 | C #0 RGB10A2 clear/STORE>color | R #1543 R11G11B10F 1080x2336* #132 fmt158 504x816 #214 RGBA16F 32x32 #367 R8 2048x2048 #390 fmt158 1528x1536 +5
+  image #444 R16F 270x584 usage=xsrc|xdst|SAMPLED|color mem=0 game-reads=1 as combined
+  image #423 R16F 270x584 usage=xsrc|xdst|SAMPLED|color mem=0 game-reads=1 as combined
+  image #1544 D24S8 1080x2336 x4 usage=ds|TRANSIENT|input mem=8 LAZY game-reads=4 as input
+  image #1543 R11G11B10F 1080x2336 usage=xsrc|xdst|SAMPLED|color mem=0
+  lapis: tier 2 miss 6 | D #1544 | S #0 | U pass -1 > #0 | V #0

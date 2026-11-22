@@ -1,0 +1,19 @@
+com.mobile.legends:UnityKillsMe shot 1 frame 0: 7 events; calls so far rp 8572 rp2 0 rendering 0 draw 884158 submit 8084 submit2 0 execute 0
+  submit q8c10
+  dispatch x10 |
+  pass 0 rp 908x1968 draws=77 ztest=77 zwrite=41 | C #0 RGBA8 clear/STORE>present | D #140 D24S8 clear/dc>ds_att clear=1.000 | R #15 RGBA8 4x4 #16 RGBA8 4x4 #19 RGBA8 4x4 #25 RGBA8 16x16 +91
+    draws wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwTTTTTTTTTwwwwwwwTtTtWWTTTTTTTTTTTTTAATTTATTTT
+  pass 1 rp 908x1968 draws=48 ztest=48 zwrite=0 | C #0 RGBA8 load/STORE>present | D #140 D24S8 load/dc>ds_att | R #73 fmt1000066007 1024x1024 #74 fmt1000066007 1024x1024 #77 fmt1000066007 1024x1024 #78 fmt1000066007 1024x1024 +28
+    draws |TTTAATTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT
+  image #140 D24S8 908x1968 usage=xsrc|xdst|SAMPLED|ds mem=0
+  lapis: tier 2 miss 0 | D #140 | S #222 | U pass 1 > #0 | V #0
+  layer: wanted 1 solo 1 declined 0 orientation 0 scene #222 908x1968, composed
+com.mobile.legends:UnityKillsMe shot 1 frame 1: 7 events; calls so far rp 8573 rp2 0 rendering 0 draw 884283 submit 8085 submit2 0 execute 0
+  submit q8c10
+  dispatch x10 |
+  pass 0 rp 908x1968 draws=77 ztest=77 zwrite=41 | C #0 RGBA8 clear/STORE>present | D #140 D24S8 clear/dc>ds_att clear=1.000 | R #15 RGBA8 4x4 #16 RGBA8 4x4 #19 RGBA8 4x4 #25 RGBA8 16x16 +91
+    draws wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwTTTTTTTTTwwwwwwwTtTtWWTTTTTTTTTTTTTAATTTATTTT
+  pass 1 rp 908x1968 draws=48 ztest=48 zwrite=0 | C #0 RGBA8 load/STORE>present | D #140 D24S8 load/dc>ds_att | R #73 fmt1000066007 1024x1024 #74 fmt1000066007 1024x1024 #77 fmt1000066007 1024x1024 #78 fmt1000066007 1024x1024 +28
+    draws |TTTAATTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT
+  image #140 D24S8 908x1968 usage=xsrc|xdst|SAMPLED|ds mem=0
+  lapis: tier 2 miss 0 | D #140 | S #222 | U pass 1 > #0 | V #0

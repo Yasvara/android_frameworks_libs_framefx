@@ -1,0 +1,102 @@
+// SPDX-FileCopyrightText: IRedDragonICY
+// SPDX-License-Identifier: LicenseRef-IRedDragonICY-NC-1.0
+//
+// The dense field moved to the generated frame's phase, so the output pass reads, at each pixel,
+// the vector of the content that is there at phase t. Gathering by fixed-point iteration from the
+// current frame's field breaks where a fast background passes a still character: the iteration
+// lands on the wrong side of the edge. Here every half-size pixel of the dense field scatters to
+// where its content is at t; when several land on one pixel the nearest (game depth) wins, and a
+// pixel nothing reached (content the current frame does not show) takes the farthest vector
+// around it, the background's, and the previous frame's colour.
+//
+// The resolve also checks where the current frame shows that content: when the current frame's
+// vector there is another one, something nearer covers it now (a character in front of a
+// passing background), and alpha says 2: take it from the previous frame. Otherwise alpha is 1.
+//
+// Passes (P(0).x): 0 clears the splat target, 1 scatters, 2 resolves into the phase field; with
+// P(0).w 0 the resolve copies the dense field (no splat this frame).
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(BINDING(0, 0)) uniform sampler2D dense;  // xy back vector (frame px), z game's, w order
+layout(BINDING(1, 0), r32ui) uniform highp uimage2D splat;
+layout(BINDING(2, 1), rgba16f) writeonly uniform highp image2D phase;
+
+PARAMS;  // P(0): x pass, y t, z 1 to interpolate (0 extrapolate), w 1 to splat
+
+const uint kEmpty = 0xffffffffu;
+const uint kIndexBits = 20u;
+
+uint keyOf(float order, ivec2 s, int width) {
+    return uint(clamp(order, 0.0, 1.0) * 4095.0) << kIndexBits | uint(s.y * width + s.x);
+}
+
+ivec2 sourceOf(uint key, int width) {
+    int i = int(key & ((1u << kIndexBits) - 1u));
+    return ivec2(i % width, i / width);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(phase);
+    if (any(greaterThanEqual(p, size))) return;
+    int pass = int(P(0).x);
+    if (pass == 0) {
+        imageStore(splat, p, uvec4(kEmpty));
+        return;
+    }
+    if (pass == 1) {
+        vec4 v = texelFetch(dense, p, 0);
+        vec2 b = 0.5 * v.xy;  // half-size pixels
+        float t = P(0).y;
+        vec2 at = vec2(p) + 0.5 + (P(0).z > 0.5 ? b * (1.0 - t) : -b * t);
+        ivec2 o = ivec2(floor(at - 0.5));
+        uint key = keyOf(v.w, p, size.x);
+        for (int j = 0; j < 2; j++) {
+            for (int i = 0; i < 2; i++) {
+                ivec2 q = o + ivec2(i, j);
+                if (all(greaterThanEqual(q, ivec2(0))) && all(lessThan(q, size))) {
+                    imageAtomicMin(splat, q, key);
+                }
+            }
+        }
+        return;
+    }
+    if (P(0).w < 0.5) {
+        imageStore(phase, p, texelFetch(dense, p, 0));
+        return;
+    }
+    uint key = imageLoad(splat, p).x;
+    if (key == kEmpty) {
+        // A hole: content the current frame does not show, as wide as the background moves
+        // behind a still character. It takes the farthest vector of the nearest ring that holds
+        // any, the background's.
+        const int kRadii[9] = int[](1, 2, 3, 4, 6, 9, 14, 20, 28);
+        const ivec2 kDirs[8] = ivec2[](ivec2(1, 0), ivec2(1, 1), ivec2(0, 1), ivec2(-1, 1),
+                                       ivec2(-1, 0), ivec2(-1, -1), ivec2(0, -1), ivec2(1, -1));
+        uint far = 0u;
+        bool found = false;
+        for (int r = 0; r < 9 && !found; r++) {
+            for (int d = 0; d < 8; d++) {
+                ivec2 q = clamp(p + kDirs[d] * kRadii[r], ivec2(0), size - 1);
+                uint k = imageLoad(splat, q).x;
+                if (k != kEmpty && (!found || (k >> kIndexBits) > (far >> kIndexBits))) {
+                    far = k;
+                    found = true;
+                }
+            }
+        }
+        vec4 v = texelFetch(dense, found ? sourceOf(far, size.x) : p, 0);
+        // Interpolating, only the previous frame shows it.
+        imageStore(phase, p, vec4(v.xyz, P(0).z > 0.5 ? 2.0 : 1.0));
+        return;
+    }
+    vec4 v = texelFetch(dense, sourceOf(key, size.x), 0);
+    // Where the current frame holds this content, in half-size pixels.
+    float t = P(0).y;
+    vec2 b = 0.5 * v.xy;
+    vec2 at = vec2(p) + 0.5 + (P(0).z > 0.5 ? -b * (1.0 - t) : b * t);
+    ivec2 q = clamp(ivec2(floor(at)), ivec2(0), size - 1);
+    vec2 there = 0.5 * texelFetch(dense, q, 0).xy;
+    bool covered = length(there - b) > max(2.0, 0.1 * length(b));
+    imageStore(phase, p, vec4(v.xyz, covered ? 2.0 : 1.0));
+}

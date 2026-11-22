@@ -1,0 +1,14 @@
+# Lepas: holds an armed game's fps cap at the panel's rate. Started by the first game the broker
+# arms for it, then blocked on the property between games.
+service lepasd /system/bin/lepasd
+    class main
+    disabled
+    user system
+    group system readproc
+    capabilities SYS_PTRACE DAC_READ_SEARCH
+
+on post-fs-data
+    mkdir /data/misc/lepas 0770 system system
+
+on property:yasvara.lepas.start=*
+    start lepasd

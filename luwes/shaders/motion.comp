@@ -1,0 +1,355 @@
+// Block motion search on the luma pyramid, coarse to fine, 8x8 blocks at every level.
+//
+// Field texels hold the back vector of a block (content at q in the current frame sat at q + v in
+// the previous one, in pixels of the level) in xy, its match error in z and the error of no
+// motion in w. Errors are mean absolute luma differences.
+//
+// The coarsest level searches every vector in a window. Each finer level starts from the parent's
+// vector and keeps whichever candidate costs least: the parent's neighbours, no motion, the
+// scene's dominant motion, the game's own velocity where it renders one and, on the second pass,
+// its own neighbours. The cost adds a smoothness
+// term against the vector median of the neighbourhood, so flat and repetitive texture follows its
+// surroundings instead of locking onto the wrong stair or tile. A one-pixel refinement and a
+// vector median finish each level.
+//
+// A workgroup is one block and 64 lanes. For block errors a lane is one candidate (slot) and two
+// rows of the block (strip), read as four 2x2 gathers: sixteen candidates per round, and only the
+// four strips of a slot are summed across lanes. With subgroups (SUBGROUPS, Vulkan) the cross-lane
+// steps are subgroup operations and there is no shared memory or barrier. GLES has no subgroups: a
+// round goes through shared memory in two barriers, its winner an atomic minimum.
+#ifdef SUBGROUPS
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#endif
+
+layout(local_size_x = 64) in;
+
+layout(BINDING(0, 0)) uniform sampler2D cur;     // luma of this level
+layout(BINDING(1, 1)) uniform sampler2D prev;
+layout(BINDING(2, 2)) uniform sampler2D parent;  // field of the coarser level
+layout(BINDING(3, 3)) uniform sampler2D field;   // this level's estimate so far
+layout(BINDING(4, 4)) uniform sampler2D global;  // 1x1: dominant vector, pixels of the coarsest level
+layout(BINDING(5, 5)) uniform sampler2D hint;    // the game's velocity per finest block, raw
+layout(BINDING(6, 0), rgba16f) writeonly uniform highp image2D result;
+
+PARAMS;  // P(0): x pass, y search radius, z smoothness weight, w coarsest-to-this-level scale
+         // P(1): the game's velocity encoding: x kind (0 none, 1 linear, 2 squared), y bias,
+         //       zw scale to frame pixels   P(2): x 1 to read the hint's flipped rows,
+         //       y frame pixels per pixel of this level, z finest blocks per block of this level
+
+const int kSearch = 0;      // exhaustive window
+const int kCandidates = 1;  // from the parent level only
+const int kPropagate = 2;   // from the parent and this level's own estimate
+const int kRefine = 3;      // +-1 around this level's estimate
+const int kMedian = 4;      // 3x3 vector median, errors recomputed
+const int kGlobal = 5;      // dominant vector of the coarsest field, one workgroup
+
+const int kMaxRadius = 16;
+const float kNone = 3.4e38;
+
+// Cross-lane steps. All are called in uniform control flow.
+#ifdef SUBGROUPS
+uint lane() { return gl_SubgroupInvocationID; }
+
+float sumStrips(float e) {
+    e += subgroupShuffleXor(e, 1u);
+    return e + subgroupShuffleXor(e, 2u);
+}
+
+// The lowest lane holding the smallest key, and that key.
+uint argMin(float key, out float least) {
+    least = subgroupMin(key);
+    return subgroupBallotFindLSB(subgroupBallot(key == least));
+}
+
+vec2 broadcast(vec2 v, uint from) { return subgroupShuffle(v, from); }
+float broadcast(float v, uint from) { return subgroupShuffle(v, from); }
+uint maxOf(uint v) { return subgroupMax(v); }
+#else
+shared vec4 sLane[64];
+
+uint lane() { return gl_LocalInvocationIndex; }
+
+float sumStrips(float e) {
+    uint l = lane();
+    sLane[l].x = e;
+    barrier();
+    uint s = l & ~3u;
+    e = sLane[s].x + sLane[s + 1u].x + sLane[s + 2u].x + sLane[s + 3u].x;
+    barrier();
+    return e;
+}
+
+uint maxOf(uint v) {
+    sLane[lane()].x = uintBitsToFloat(v);
+    barrier();
+    for (uint i = 0u; i < 64u; i++) v = max(v, floatBitsToUint(sLane[i].x));
+    barrier();
+    return v;
+}
+
+// A round of consider() through shared memory in two barriers. Rounds alternate between two
+// copies of everything they publish, so a round never waits for the previous one's readers.
+shared float sStrip[2][64];  // each lane's strip error
+shared vec2 sCandidate[2][16];
+shared uint sLeast[2];       // packed cost and slot of the round's winner
+shared vec2 sNear[9];
+uint gRound = 0u;
+
+void beginRounds() {
+    if (lane() == 0u) sLeast[0] = sLeast[1] = 0xffffffffu;
+    barrier();
+}
+#endif
+
+uint strip() { return lane() & 3u; }
+int slot() { return int(lane() >> 2); }
+
+vec2 fieldAt(ivec2 b) {
+    return texelFetch(field, clamp(b, ivec2(0), textureSize(field, 0) - 1), 0).xy;
+}
+
+vec2 parentAt(ivec2 b) {
+    ivec2 lim = textureSize(parent, 0) - 1;
+    return texelFetch(parent, clamp(b / 2, ivec2(0), lim), 0).xy * 2.0;
+}
+
+// The game's back vector for block b in pixels of this level, its own motion search's
+// convention; none when the game renders no velocity Luwes could fit.
+vec2 gameVector(ivec2 b) {
+    float kind = P(1).x;
+    if (kind < 0.5) return vec2(0.0);
+    int s = int(P(2).z);
+    ivec2 lim = textureSize(hint, 0) - 1;
+    vec4 t = texelFetch(hint, clamp(b * s + s / 2, ivec2(0), lim), 0);
+    vec2 v = (P(2).x > 0.5 ? t.zw : t.xy) - P(1).y;
+    if (kind > 1.5) {
+        v *= 2.0;
+        v = sign(v) * v * v;
+    }
+    return v * P(1).zw / P(2).y;
+}
+
+ivec2 neighbour(int i) {
+    return ivec2(i % 3 - 1, i / 3 - 1);
+}
+
+// Neighbour i of the eight around a block, skipping the block itself.
+ivec2 around(int i) {
+    return neighbour(i + (i >= 4 ? 1 : 0));
+}
+
+// Vector median of the 3x3 neighbourhood, lane i < 9 holding neighbour i: the member closest, in
+// summed L1 distance, to all the others; the lowest lane on a tie.
+#ifdef SUBGROUPS
+vec2 vectorMedian(vec2 mine) {
+    float c = 0.0;
+    for (uint j = 0u; j < 9u; j++) {
+        vec2 d = abs(mine - broadcast(mine, j));
+        c += d.x + d.y;
+    }
+    float least;
+    return broadcast(mine, argMin(lane() < 9u ? c : kNone, least));
+}
+#else
+vec2 vectorMedian(vec2 mine) {
+    if (lane() < 9u) sNear[lane()] = mine;
+    barrier();
+    vec2 n[9];
+    for (int j = 0; j < 9; j++) n[j] = sNear[j];
+    vec2 median = n[0];
+    float least = kNone;
+    for (int i = 0; i < 9; i++) {
+        float c = 0.0;
+        for (int j = 0; j < 9; j++) {
+            vec2 d = abs(n[i] - n[j]);
+            c += d.x + d.y;
+        }
+        if (c < least) {
+            least = c;
+            median = n[i];
+        }
+    }
+    return median;
+}
+#endif
+
+// The block's 2x2 quads in this lane's strip; the gather footprint at a texel corner is exactly
+// the four texels around it.
+void loadBlock(out vec4 quads[4], ivec2 origin) {
+    vec2 texel = 1.0 / vec2(textureSize(cur, 0));
+    vec2 at = (vec2(origin) + vec2(0.0, 2.0 * float(strip())) + 1.0) * texel;
+    for (int q = 0; q < 4; q++) quads[q] = textureGather(cur, at + vec2(2.0 * float(q), 0.0) * texel, 0);
+}
+
+// Summed absolute difference between this lane's strip and the previous frame displaced by v.
+float stripError(vec4 quads[4], ivec2 origin, vec2 v) {
+    vec2 texel = 1.0 / vec2(textureSize(prev, 0));
+    vec2 at = (vec2(origin) + v + vec2(0.0, 2.0 * float(strip())) + 1.0) * texel;
+    float e = 0.0;
+    for (int q = 0; q < 4; q++) {
+        vec4 d = abs(quads[q] - textureGather(prev, at + vec2(2.0 * float(q), 0.0) * texel, 0));
+        e += d.x + d.y + d.z + d.w;
+    }
+    return e;
+}
+
+// Mean absolute difference between the block and the previous frame displaced by v; every lane
+// of a slot ends up holding its slot's.
+float blockError(vec4 quads[4], ivec2 origin, vec2 v) {
+    return sumStrips(stripError(quads, origin, v)) * (1.0 / 64.0);
+}
+
+struct Best {
+    vec2 v;
+    float error;
+    float cost;
+};
+
+// One round: this lane's slot tries v as candidate i of `count`. The lowest cost wins, the
+// earliest candidate on a tie.
+#ifdef SUBGROUPS
+void consider(inout Best best, vec4 quads[4], ivec2 origin, vec2 v, int i, int count,
+              vec2 predicted, float lambda) {
+    float e = blockError(quads, origin, v);
+    vec2 d = abs(v - predicted);
+    float least;
+    uint winner = argMin(i < count ? e + lambda * (d.x + d.y) : kNone, least);
+    vec2 wv = broadcast(v, winner);
+    float we = broadcast(e, winner);
+    if (least < best.cost) best = Best(wv, we, least);
+}
+#else
+// Costs are never negative, so their bits order like them; the low four bits make room for the
+// slot, which settles near ties toward the earlier candidate.
+void consider(inout Best best, vec4 quads[4], ivec2 origin, vec2 v, int i, int count,
+              vec2 predicted, float lambda) {
+    uint p = gRound & 1u;
+    gRound++;
+    uint l = lane();
+    uint k = uint(slot());
+    sStrip[p][l] = stripError(quads, origin, v);
+    if (strip() == 0u) sCandidate[p][k] = v;
+    barrier();
+    uint s = l & ~3u;
+    float e = (sStrip[p][s] + sStrip[p][s + 1u] + sStrip[p][s + 2u] + sStrip[p][s + 3u]) *
+            (1.0 / 64.0);
+    vec2 d = abs(v - predicted);
+    if (strip() == 0u && i < count) {
+        atomicMin(sLeast[p], (floatBitsToUint(e + lambda * (d.x + d.y)) & ~15u) | k);
+    }
+    barrier();
+    uint w = sLeast[p] & 15u;
+    // Nobody reads the other copy again before the next round's first barrier.
+    if (l == 0u) sLeast[1u - p] = 0xffffffffu;
+    uint ws = 4u * w;
+    float we = (sStrip[p][ws] + sStrip[p][ws + 1u] + sStrip[p][ws + 2u] + sStrip[p][ws + 3u]) *
+            (1.0 / 64.0);
+    vec2 wv = sCandidate[p][w];
+    vec2 wd = abs(wv - predicted);
+    float least = we + lambda * (wd.x + wd.y);
+    if (least < best.cost) best = Best(wv, we, least);
+}
+#endif
+
+void dominant() {
+    // Each lane tallies, for its share of coarsest blocks, how many blocks share that vector.
+    int radius = min(int(P(0).y), kMaxRadius);
+    ivec2 size = textureSize(field, 0);
+    int n = size.x * size.y;
+    uint best = 0u;
+    for (int i = int(lane()); i < n; i += 64) {
+        ivec2 v = ivec2(round(texelFetch(field, ivec2(i % size.x, i / size.x), 0).xy));
+        if (v == ivec2(0) || any(greaterThan(abs(v), ivec2(radius)))) continue;
+        uint votes = 0u;
+        for (int j = 0; j < n; j++) {
+            ivec2 w = ivec2(round(texelFetch(field, ivec2(j % size.x, j / size.x), 0).xy));
+            votes += w == v ? 1u : 0u;
+        }
+        best = max(best, votes << 16 | uint(i));
+    }
+    best = maxOf(best);
+    if (lane() != 0u) return;
+    // A scene without a dominant motion has none; one vote in ten blocks makes one.
+    vec2 v = vec2(0.0);
+    if ((best >> 16) * 10u >= uint(n)) {
+        int i = int(best & 0xffffu);
+        v = round(texelFetch(field, ivec2(i % size.x, i / size.x), 0).xy);
+    }
+    imageStore(result, ivec2(0), vec4(v, 0.0, 0.0));
+}
+
+void main() {
+    int pass = int(P(0).x);
+    if (pass == kGlobal) {
+        dominant();
+        return;
+    }
+#ifndef SUBGROUPS
+    beginRounds();
+#endif
+    ivec2 b = ivec2(gl_WorkGroupID.xy);
+    ivec2 origin = b * 8;
+    vec4 quads[4];
+    loadBlock(quads, origin);
+    float lambda = P(0).z;
+    Best best = Best(vec2(0.0), 0.0, kNone);
+
+    if (pass == kSearch) {
+        int radius = min(int(P(0).y), kMaxRadius);
+        int side = 2 * radius + 1;
+        for (int r = 0; r < side * side; r += 16) {
+            int i = r + slot();
+            vec2 v = vec2(i % side - radius, i / side - radius);
+            // Smoothness against no motion: of equal matches the smaller vector wins.
+            consider(best, quads, origin, v, i, side * side, vec2(0.0), lambda * 0.25);
+        }
+        float still = blockError(quads, origin, vec2(0.0));
+        if (lane() == 0u) imageStore(result, b, vec4(best.v, best.error, still));
+        return;
+    }
+
+    bool own = pass != kCandidates;
+    int l = int(lane());
+    vec2 near = l < 9 ? (own ? fieldAt(b + neighbour(l)) : parentAt(b + 2 * neighbour(l)))
+                      : vec2(0.0);
+    vec2 predicted = vectorMedian(near);
+
+    if (pass == kMedian) {
+        float e = blockError(quads, origin, predicted);
+        float still = blockError(quads, origin, vec2(0.0));
+        if (lane() == 0u) imageStore(result, b, vec4(predicted, e, still));
+        return;
+    }
+
+    int k = slot();
+    if (pass == kRefine) {
+        vec2 v = fieldAt(b) + vec2(neighbour(min(k, 8)));
+        consider(best, quads, origin, v, k, 9, predicted, lambda);
+    } else {
+        int count = own ? 20 : 12;
+        for (int r = 0; r < count; r += 16) {
+            int i = r + k;
+            vec2 v;
+            if (i == 0) {
+                v = vec2(0.0);
+            } else if (i == 1) {
+                v = texelFetch(global, ivec2(0), 0).xy * P(0).w;
+            } else if (i == 2) {
+                v = parentAt(b);
+            } else if (i < 11) {
+                v = parentAt(b + 2 * around(i - 3));
+            } else if (i == count - 1) {
+                v = gameVector(b);
+            } else {
+                v = fieldAt(b + around(min(i, 18) - 11));
+            }
+            // The game's vector keeps its sub-pixel part: it is the motion, not a guess to refine.
+            consider(best, quads, origin, i == count - 1 ? v : round(v), i, count, predicted,
+                     lambda);
+        }
+    }
+    if (lane() == 0u) imageStore(result, b, vec4(best.v, best.error, 0.0));
+}
