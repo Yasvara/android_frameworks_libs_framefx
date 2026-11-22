@@ -6,6 +6,8 @@ When a package is armed (`/data/misc/framefx/armed/<uid>`), `libEGL` and `libvul
 
 ![Luwes 2x HUD-Clean Frame Generation](docs/luwes-30v60.gif)
 
+![Lapis In-Frame G-Buffer, Depth, Velocity & Ray-Traced AO Taps](docs/lapis-gbuffer.jpg)
+
 ![Lapis In-Frame HUD Separation vs Naive Swapchain Frame-Gen](docs/lapis-hud.jpg)
 
 ## Subsystems
