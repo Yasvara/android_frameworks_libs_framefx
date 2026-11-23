@@ -167,6 +167,30 @@ TEST(LapisProjection, VoteFindsNothingInNoise) {
     EXPECT_FALSE(vote.best(&p, &near, &far));
 }
 
+TEST(LapisProjection, VoteRecordsHitOffsetsAndEdges) {
+    // Test start=0, unaligned-to-64 offsets, tail edge, both layouts, and NaN/zero resilience.
+    for (bool rowMajor : {false, true}) {
+        const auto mat = Perspective(45, 2.166f, 0.25f, 6000, DepthRange::kReversed, rowMajor);
+        for (size_t at : {size_t{0}, size_t{4}, size_t{8}, size_t{12}, size_t{16}, size_t{84}}) {
+            std::vector<float> mem(100, 0.0f);
+            mem[3] = NAN;
+            mem[7] = INFINITY;
+            mem[11] = -0.0f;
+            Put(&mem, at, mat);
+            ProjectionVote vote;
+            vote.scan(mem.data(), mem.size(), 2118.0f / 978.0f, DepthRange::kReversed, 0x1234u, 64u);
+            Projection p;
+            float near, far;
+            std::vector<ProjectionVote::Hit> hits;
+            ASSERT_TRUE(vote.best(&p, &near, &far, &hits)) << "rowMajor=" << rowMajor << " at=" << at;
+            EXPECT_EQ(p.rowMajor, rowMajor);
+            ASSERT_EQ(hits.size(), 1u);
+            EXPECT_EQ(hits[0].tag, 0x1234u);
+            EXPECT_EQ(hits[0].offset, 64u + at * sizeof(float));
+        }
+    }
+}
+
 // Genshin's per-camera constants as its scene pass read them on device (shot 2026-10-21): a block
 // with the camera position, the world-space view-projection with its jitter, then the same
 // camera-relative.

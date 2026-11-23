@@ -9,15 +9,32 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <tuple>
+
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
 
 namespace framefx::lapis {
 namespace {
 
 constexpr float kAspectTolerance = 0.01f;
+// Exact IEEE-754 binary32 representations for branchless magnitude comparisons.
+// Masking the sign bit (& 0x7fffffff) preserves ordering over [0, +inf]; NaNs lie above kInfBits.
+constexpr uint32_t kAbsMask = 0x7fffffffu;
+constexpr uint32_t kZeroBits = 0x358637bdu;      // 1e-6f
+constexpr uint32_t kInfBits = 0x7f800000u;       // +inf
+constexpr uint32_t kLightMaxBits = 0x49742400u;  // 1e6f
 
-bool Zero(float v) {
-    return std::fabs(v) < 1e-6f;
+inline uint32_t AbsBits(float v) {
+    uint32_t u;
+    std::memcpy(&u, &v, sizeof(u));
+    return u & kAbsMask;
+}
+
+inline bool Zero(float v) {
+    return AbsBits(v) < kZeroBits;
 }
 
 float LongOverShort(float aspect) {
@@ -26,6 +43,54 @@ float LongOverShort(float aspect) {
 
 int LogKey(float v) {
     return std::isinf(v) ? INT_MAX : static_cast<int>(std::lround(std::log2(v) * 1000.0f));
+}
+
+template <bool RowMajor>
+inline bool AsProjectionImpl(const float* m, Projection* out) {
+    // Reject on w = ±1 first: in real GPU memory (mostly zeros and non-perspective data) this
+    // eliminates >99.9% of candidates in one load before touching the rest of the matrix.
+    const float w = RowMajor ? m[14] : m[11];
+    if (!(std::fabs(std::fabs(w) - 1.0f) <= 1e-4f)) return false;
+
+    const float sx = m[0];
+    const float sy = m[5];
+    const float asx = std::fabs(sx);
+    const float asy = std::fabs(sy);
+    if (!(asx >= 0.05f && asx <= 50.0f && asy >= 0.05f && asy <= 50.0f)) return false;
+
+    const float b = RowMajor ? m[11] : m[14];
+    if (AbsBits(b) < kZeroBits) return false;
+
+    const float jx = RowMajor ? m[2] : m[8];
+    const float jy = RowMajor ? m[6] : m[9];
+    if (!(std::fabs(jx) <= 0.5f && std::fabs(jy) <= 0.5f)) return false;
+
+    // All nine structurally-zero entries must have |v| < 1e-6f (and be non-NaN/Inf).
+    // Shared across both layouts: m[1], m[3], m[4], m[7], m[12], m[13], m[15].
+    // Layout-specific: row-major m[8], m[9]; column-major m[2], m[6].
+    uint32_t maxZ = std::max(AbsBits(m[1]), AbsBits(m[3]));
+    maxZ = std::max(maxZ, std::max(AbsBits(m[4]), AbsBits(m[7])));
+    maxZ = std::max(maxZ, std::max(AbsBits(m[12]), AbsBits(m[13])));
+    maxZ = std::max(maxZ, AbsBits(m[15]));
+    if constexpr (RowMajor) {
+        maxZ = std::max(maxZ, std::max(AbsBits(m[8]), AbsBits(m[9])));
+    } else {
+        maxZ = std::max(maxZ, std::max(AbsBits(m[2]), AbsBits(m[6])));
+    }
+    if (maxZ >= kZeroBits) return false;
+
+    const float a = m[10];
+    if (!std::isfinite(sx + sy + jx + jy + a + b)) return false;
+
+    out->sx = sx;
+    out->sy = sy;
+    out->jx = jx;
+    out->jy = jy;
+    out->a = a;
+    out->b = b;
+    out->w = w;
+    out->rowMajor = RowMajor;
+    return true;
 }
 
 }  // namespace
@@ -67,56 +132,46 @@ bool Projection::planes(DepthRange range, float* near, float* far) const {
 }
 
 bool AsProjection(const float* m, bool rowMajor, Projection* out) {
-    const auto at = [&](int r, int c) { return rowMajor ? m[r * 4 + c] : m[c * 4 + r]; };
-    if (!Zero(at(0, 1)) || !Zero(at(0, 3)) || !Zero(at(1, 0)) || !Zero(at(1, 3)) ||
-        !Zero(at(2, 0)) || !Zero(at(2, 1)) || !Zero(at(3, 0)) || !Zero(at(3, 1)) ||
-        !Zero(at(3, 3))) {
-        return false;
-    }
-    const float w = at(3, 2);
-    if (std::fabs(std::fabs(w) - 1.0f) > 1e-4f) return false;
-    Projection p;
-    p.sx = at(0, 0);
-    p.sy = at(1, 1);
-    p.jx = at(0, 2);
-    p.jy = at(1, 2);
-    p.a = at(2, 2);
-    p.b = at(2, 3);
-    p.w = w;
-    p.rowMajor = rowMajor;
-    if (!std::isfinite(p.sx + p.sy + p.jx + p.jy + p.a + p.b)) return false;
-    if (std::fabs(p.sx) < 0.05f || std::fabs(p.sx) > 50.0f || std::fabs(p.sy) < 0.05f ||
-        std::fabs(p.sy) > 50.0f || Zero(p.b) || std::fabs(p.jx) > 0.5f || std::fabs(p.jy) > 0.5f) {
-        return false;
-    }
-    *out = p;
-    return true;
+    return rowMajor ? AsProjectionImpl<true>(m, out) : AsProjectionImpl<false>(m, out);
 }
 
 namespace {
 
-float Dot3(const float* a, const float* b) {
+inline float Dot3(const float* a, const float* b) {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
-// Whether the 16 floats at `f`, read with `rowMajor`, are P V: the w row a unit direction (the
+// Whether the 16 floats at `f`, read with `RowMajor`, are P V: the w row a unit direction (the
 // view axis), x and y rows perpendicular to each other with the focal scales `aspect` apart.
-bool AsViewProjection(const float* f, bool rowMajor, float aspect, ViewProjection* out) {
+template <bool RowMajor>
+bool AsViewProjection(const float* f, float aspect, ViewProjection* out) {
+    // Test the w row's unit length first: rejects almost all non-camera windows before transposing
+    // or validating the other 12 floats.
+    const float w0 = RowMajor ? f[12] : f[3];
+    const float w1 = RowMajor ? f[13] : f[7];
+    const float w2 = RowMajor ? f[14] : f[11];
+    const float ww = w0 * w0 + w1 * w1 + w2 * w2;
+    if (!(std::fabs(ww - 1.0f) <= 0.02f)) return false;
+
     ViewProjection v;
-    for (int r = 0; r < 4; r++) {
-        for (int c = 0; c < 4; c++) v.m[r * 4 + c] = rowMajor ? f[r * 4 + c] : f[c * 4 + r];
+    if constexpr (RowMajor) {
+        std::memcpy(v.m, f, sizeof(v.m));
+    } else {
+        for (int r = 0; r < 4; r++) {
+            for (int c = 0; c < 4; c++) v.m[r * 4 + c] = f[c * 4 + r];
+        }
     }
-    for (float x : v.m) {
-        if (!std::isfinite(x)) return false;
+    for (float val : v.m) {
+        if (!std::isfinite(val)) return false;
     }
     const float* x = v.m;
     const float* y = v.m + 4;
     const float* w = v.m + 12;
-    const float ww = Dot3(w, w);
-    if (std::fabs(ww - 1.0f) > 0.02f) return false;
     // Jitter tilts x and y toward the view axis; take it out before the shape tests.
-    v.jx = Dot3(x, w) / ww;
-    v.jy = Dot3(y, w) / ww;
+    const float invWw = 1.0f / ww;
+    v.jx = Dot3(x, w) * invWw;
+    v.jy = Dot3(y, w) * invWw;
+    if (std::fabs(v.jx) > 0.05f || std::fabs(v.jy) > 0.05f) return false;
     float xs[3];
     float ys[3];
     for (int k = 0; k < 3; k++) {
@@ -125,7 +180,7 @@ bool AsViewProjection(const float* f, bool rowMajor, float aspect, ViewProjectio
     }
     const float sx = std::sqrt(Dot3(xs, xs));
     const float sy = std::sqrt(Dot3(ys, ys));
-    if (sx < 0.05f || sy < 0.05f || std::fabs(v.jx) > 0.05f || std::fabs(v.jy) > 0.05f) return false;
+    if (sx < 0.05f || sy < 0.05f) return false;
     if (std::fabs(sy / sx / aspect - 1.0f) > 0.02f) return false;
     if (std::fabs(Dot3(xs, ys)) > 0.01f * sx * sy) return false;
     v.world = std::fabs(w[3]) > 1e-3f || std::fabs(x[3]) > 1e-3f || std::fabs(y[3]) > 1e-3f;
@@ -157,8 +212,8 @@ bool FindViewProjection(const std::vector<Constants>& blocks, float aspect, View
         std::vector<size_t> counted;  // candidates this block already counted for
         for (size_t i = 0; i + 16 <= c.values.size(); i += 4) {
             ViewProjection v;
-            if (!AsViewProjection(c.values.data() + i, false, aspect, &v) &&
-                !AsViewProjection(c.values.data() + i, true, aspect, &v)) {
+            if (!AsViewProjection<false>(c.values.data() + i, aspect, &v) &&
+                !AsViewProjection<true>(c.values.data() + i, aspect, &v)) {
                 continue;
             }
             size_t at = 0;
@@ -186,53 +241,83 @@ bool FindViewProjection(const std::vector<Constants>& blocks, float aspect, View
 
 namespace {
 
+inline bool LightW3Ok(float w3) {
+    const float aw3 = std::fabs(w3);
+    return aw3 >= 1e-3f && aw3 <= 1e6f;
+}
+
 // The 16 floats at `f` as an orthographic light matrix: w row (0, 0, 0, 1) up to scale, the three
 // axes perpendicular and not the identity's (a UI's), a square map whose depth reaches well past
 // its width (a rigid or scaled matrix, a camera's view or an object's, scales its axes alike or
 // near), and `eye`, when given, inside its map. The depth axis, normalized, into `axis`; the
 // rows' lengths into `scales`; the matrix, row-major, into `m`.
-bool AsLightMatrix(const float* f, bool rowMajor, const float* eye, float axis[3],
-                   float scales[3], float m[16]) {
-    for (int r = 0; r < 4; r++) {
-        for (int c = 0; c < 4; c++) m[r * 4 + c] = rowMajor ? f[r * 4 + c] : f[c * 4 + r];
+template <bool RowMajor>
+bool AsLightMatrix(const float* f, const float* eye, float axis[3], float scales[3], float m[16]) {
+    // Reject on the w row first (~94% of calls fail here) before touching the other 12 floats.
+    const float w3 = f[15];
+    if (!LightW3Ok(w3)) return false;
+    const float w0 = RowMajor ? f[12] : f[3];
+    const float w1 = RowMajor ? f[13] : f[7];
+    const float w2 = RowMajor ? f[14] : f[11];
+    if (std::max(AbsBits(w0), std::max(AbsBits(w1), AbsBits(w2))) >= kZeroBits) return false;
+
+    float x[4], y[4], z[4];
+    if constexpr (RowMajor) {
+        std::memcpy(x, f, sizeof(x));
+        std::memcpy(y, f + 4, sizeof(y));
+        std::memcpy(z, f + 8, sizeof(z));
+    } else {
+        x[0] = f[0]; x[1] = f[4]; x[2] = f[8];  x[3] = f[12];
+        y[0] = f[1]; y[1] = f[5]; y[2] = f[9];  y[3] = f[13];
+        z[0] = f[2]; z[1] = f[6]; z[2] = f[10]; z[3] = f[14];
     }
-    for (int i = 0; i < 16; i++) {
-        if (!std::isfinite(m[i]) || std::fabs(m[i]) > 1e6f) return false;
+    uint32_t maxMag = 0;
+    for (int k = 0; k < 4; k++) {
+        maxMag = std::max(maxMag, std::max(AbsBits(x[k]), std::max(AbsBits(y[k]), AbsBits(z[k]))));
     }
-    const float* x = m;
-    const float* y = m + 4;
-    const float* z = m + 8;
-    const float* w = m + 12;
-    if (!Zero(w[0]) || !Zero(w[1]) || !Zero(w[2]) || std::fabs(w[3]) < 1e-3f) return false;
+    if (maxMag > kLightMaxBits) return false;
+
     const float xx = Dot3(x, x);
     const float yy = Dot3(y, y);
     const float zz = Dot3(z, z);
     if (xx < 1e-12f || yy < 1e-12f || zz < 1e-12f) return false;
-    if (std::fabs(Dot3(x, y)) > 0.01f * std::sqrt(xx * yy) ||
-        std::fabs(Dot3(x, z)) > 0.01f * std::sqrt(xx * zz) ||
-        std::fabs(Dot3(y, z)) > 0.01f * std::sqrt(yy * zz)) {
-        return false;
-    }
+    // Scale ratio rejects ~90% of remaining candidates before computing cross dot products.
+    if (std::fabs(xx - yy) > 0.04f * xx || zz > 0.25f * xx) return false;
     const auto alongAxis = [](const float* v, int k, float len2) {
         return v[k] * v[k] > 0.9999f * len2;
     };
     if (alongAxis(x, 0, xx) && alongAxis(y, 1, yy) && alongAxis(z, 2, zz)) return false;
-    if (std::fabs(xx - yy) > 0.04f * xx || zz > 0.25f * xx) return false;
+    // Squared orthogonality avoids three sqrts: 1e-12 <= xx,yy,zz <= 3e12 keeps products in range.
+    const float dxy = Dot3(x, y);
+    const float dxz = Dot3(x, z);
+    const float dyz = Dot3(y, z);
+    if (dxy * dxy > 1e-4f * xx * yy || dxz * dxz > 1e-4f * xx * zz ||
+        dyz * dyz > 1e-4f * yy * zz) {
+        return false;
+    }
     if (eye != nullptr) {
         // A cascade is fitted around the camera's view: the camera falls inside its square, and
         // within its depth, with a margin.
-        const float cx = (Dot3(x, eye) + x[3]) / w[3];
-        const float cy = (Dot3(y, eye) + y[3]) / w[3];
-        const float cz = (Dot3(z, eye) + z[3]) / w[3];
+        const float cx = (Dot3(x, eye) + x[3]) / w3;
+        const float cy = (Dot3(y, eye) + y[3]) / w3;
+        const float cz = (Dot3(z, eye) + z[3]) / w3;
         if (!(std::fabs(cx) <= 1.5f && std::fabs(cy) <= 1.5f && std::fabs(cz) <= 1.5f)) {
             return false;
         }
     }
-    const float inv = 1.0f / std::sqrt(zz);
+    const float sz = std::sqrt(zz);
+    const float inv = 1.0f / sz;
     for (int k = 0; k < 3; k++) axis[k] = z[k] * inv;
     scales[0] = std::sqrt(xx);
     scales[1] = std::sqrt(yy);
-    scales[2] = std::sqrt(zz);
+    scales[2] = sz;
+    std::memcpy(m, x, sizeof(x));
+    std::memcpy(m + 4, y, sizeof(y));
+    std::memcpy(m + 8, z, sizeof(z));
+    m[12] = w0;
+    m[13] = w1;
+    m[14] = w2;
+    m[15] = w3;
     return true;
 }
 
@@ -267,11 +352,13 @@ std::vector<LightMatrix> LightMatrices(const std::vector<Constants>& blocks) {
     for (size_t b = 0; b < blocks.size(); b++) {
         const std::vector<float>& v = blocks[b].values;
         for (size_t i = 0; i + 16 <= v.size(); i += 4) {
+            const float* p = v.data() + i;
+            if (!LightW3Ok(p[15])) continue;
             float axis[3];
             float scales[3];
             float m[16];
-            if (!AsLightMatrix(v.data() + i, false, nullptr, axis, scales, m) &&
-                !AsLightMatrix(v.data() + i, true, nullptr, axis, scales, m)) {
+            if (!AsLightMatrix<false>(p, nullptr, axis, scales, m) &&
+                !AsLightMatrix<true>(p, nullptr, axis, scales, m)) {
                 continue;
             }
             out.push_back({b, i, scales[0], m[3] / m[15], m[7] / m[15], m[11] / m[15]});
@@ -291,10 +378,12 @@ bool FindLightDirection(const std::vector<Constants>& blocks, bool reversed, con
     std::vector<Seen> seen;
     for (const Constants& c : blocks) {
         for (size_t i = 0; i + 16 <= c.values.size(); i += 4) {
+            const float* p = c.values.data() + i;
+            if (!LightW3Ok(p[15])) continue;
             Seen found = {};
             found.count = 1;
-            if (!AsLightMatrix(c.values.data() + i, false, eye, found.axis, found.scales, found.m) &&
-                !AsLightMatrix(c.values.data() + i, true, eye, found.axis, found.scales, found.m)) {
+            if (!AsLightMatrix<false>(p, eye, found.axis, found.scales, found.m) &&
+                !AsLightMatrix<true>(p, eye, found.axis, found.scales, found.m)) {
                 continue;
             }
             const float* axis = found.axis;
@@ -426,21 +515,24 @@ std::vector<LightVote::Cascade> LightVote::cascades() const {
     return out;
 }
 
-void ProjectionVote::scan(const float* f, size_t count, float aspect, DepthRange range) {
+__attribute__((noinline)) void ProjectionVote::scan(const float* f, size_t count, float aspect,
+                                                    DepthRange range, uint64_t tag,
+                                                    size_t baseOffset) {
     if (range != range_) {
         seen_.clear();
         range_ = range;
     }
+    if (count < 16) return;
     const float want = LongOverShort(aspect);
-    for (size_t i = 0; i + 16 <= count; i += 4) {
-        // Cheap reject first: one of the two layouts keeps these zero.
-        if (!Zero(f[i + 1]) && !Zero(f[i + 4])) continue;
+    const size_t numVecs = count / 4;
+
+    const auto checkAt = [&](size_t i) __attribute__((noinline, cold)) {
         Projection p;
-        if (!AsProjection(f + i, false, &p) && !AsProjection(f + i, true, &p)) continue;
-        if (std::fabs(LongOverShort(p.aspect()) / want - 1.0f) > kAspectTolerance) continue;
+        if (!AsProjectionImpl<false>(f + i, &p) && !AsProjectionImpl<true>(f + i, &p)) return;
+        if (std::fabs(LongOverShort(p.aspect()) / want - 1.0f) > kAspectTolerance) return;
         float near;
         float far;
-        if (!p.planes(range, &near, &far)) continue;
+        if (!p.planes(range, &near, &far)) return;
         const Key key = {static_cast<int>(std::lround(p.fovY() * 10.0f)),
                          static_cast<int>(std::lround(p.aspect() * 1000.0f)), LogKey(near),
                          LogKey(far)};
@@ -449,10 +541,70 @@ void ProjectionVote::scan(const float* f, size_t count, float aspect, DepthRange
         s.near = near;
         s.far = far;
         s.count++;
+        if (tag != 0) {
+            const size_t off = baseOffset + i * sizeof(float);
+            for (uint8_t h = 0; h < s.hitCount; h++) {
+                if (s.hits[h].tag == tag && s.hits[h].offset == off) return;
+            }
+            if (s.hitCount < Seen::kMaxHits) s.hits[s.hitCount++] = {tag, off};
+        }
+    };
+
+    // Every perspective matrix in either layout has its last vec4 [m[12], m[13], m[14], m[15]]
+    // shaped as [0, 0, non-zero finite, 0] (m[14] is `b` in col-major, `w = ±1` in row-major).
+    // Filtering on that vec4 rejects zero-filled buffers, affine/rigid matrices (m[15] = 1),
+    // general float data, and NaN/Inf in a single pass before touching the rest of the matrix.
+    const auto* u = reinterpret_cast<const uint32_t*>(f);
+    const auto vec3MayMatch = [](const uint32_t* v) -> bool {
+        const uint32_t a0 = v[0] & kAbsMask;
+        const uint32_t a1 = v[1] & kAbsMask;
+        const uint32_t a2 = v[2] & kAbsMask;
+        const uint32_t a3 = v[3] & kAbsMask;
+        return std::max(a0, std::max(a1, a3)) < kZeroBits &&
+                (a2 - kZeroBits) < (kInfBits - kZeroBits);
+    };
+
+    size_t j = 3;
+#if defined(__ARM_NEON)
+    // Align the 64-byte (4-vec4) NEON stream to cache lines when possible.
+    while (j < numVecs && (reinterpret_cast<uintptr_t>(u + j * 4) & 63u) != 0) {
+        if (__builtin_expect(vec3MayMatch(u + j * 4), 0)) checkAt((j - 3) * 4);
+        j++;
+    }
+    const uint32x4_t vAbsMask = vdupq_n_u32(kAbsMask);
+    const uint32_t subArr[4] = {0u, 0u, kZeroBits, 0u};
+    const uint32_t limArr[4] = {kZeroBits, kZeroBits, kInfBits - kZeroBits, kZeroBits};
+    const uint32x4_t vSub = vld1q_u32(subArr);
+    const uint32x4_t vLim = vld1q_u32(limArr);
+    for (; j + 4 <= numVecs; j += 4) {
+        const uint32_t* p = u + j * 4;
+        const uint32x4_t a0 = vandq_u32(vld1q_u32(p), vAbsMask);
+        const uint32x4_t a1 = vandq_u32(vld1q_u32(p + 4), vAbsMask);
+        const uint32x4_t a2 = vandq_u32(vld1q_u32(p + 8), vAbsMask);
+        const uint32x4_t a3 = vandq_u32(vld1q_u32(p + 12), vAbsMask);
+
+        const uint32x4_t ok0 = vcltq_u32(vsubq_u32(a0, vSub), vLim);
+        const uint32x4_t ok1 = vcltq_u32(vsubq_u32(a1, vSub), vLim);
+        const uint32x4_t ok2 = vcltq_u32(vsubq_u32(a2, vSub), vLim);
+        const uint32x4_t ok3 = vcltq_u32(vsubq_u32(a3, vSub), vLim);
+
+        const uint32x4_t hits = vpminq_u32(vpminq_u32(ok0, ok1), vpminq_u32(ok2, ok3));
+        const uint64_t mask = vget_lane_u64(vreinterpret_u64_u16(vmovn_u32(hits)), 0);
+        if (__builtin_expect(mask != 0, 0)) {
+            if (mask & 0xffffu) checkAt((j - 3) * 4);
+            if ((mask >> 16) & 0xffffu) checkAt((j - 2) * 4);
+            if ((mask >> 32) & 0xffffu) checkAt((j - 1) * 4);
+            if (mask >> 48) checkAt(j * 4);
+        }
+    }
+#endif
+    for (; j < numVecs; j++) {
+        if (__builtin_expect(vec3MayMatch(u + j * 4), 0)) checkAt((j - 3) * 4);
     }
 }
 
-bool ProjectionVote::best(Projection* out, float* near, float* far) const {
+bool ProjectionVote::best(Projection* out, float* near, float* far,
+                          std::vector<Hit>* hits) const {
     const Seen* top = nullptr;
     for (const auto& [key, s] : seen_) {
         if (top == nullptr || s.count > top->count) top = &s;
@@ -461,6 +613,7 @@ bool ProjectionVote::best(Projection* out, float* near, float* far) const {
     *out = top->p;
     *near = top->near;
     *far = top->far;
+    if (hits != nullptr) hits->assign(top->hits, top->hits + top->hitCount);
     return true;
 }
 

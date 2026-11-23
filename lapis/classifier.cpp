@@ -18,6 +18,9 @@ namespace {
 static_assert(std::is_standard_layout_v<Roles> && sizeof(Roles) == 64 && offsetof(Roles, miss) == 58);
 static_assert(std::is_standard_layout_v<TrackerState> && sizeof(TrackerState) == 156 &&
               offsetof(TrackerState, miss) == 152);
+static_assert(std::is_standard_layout_v<GlassCut> && sizeof(GlassCut) == 16 &&
+              offsetof(GlassCut, held) == 3 && offsetof(GlassCut, step) == 4 &&
+              offsetof(GlassCut, target) == 12);
 
 extern "C" {
 void framefx_lapis_classify(const FfiFrame* frame, Roles* out);

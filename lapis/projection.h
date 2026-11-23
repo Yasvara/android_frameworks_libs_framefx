@@ -92,17 +92,28 @@ bool EyeOf(const float vp[16], float out[3]);
 // count; the newest jitter is kept.
 class ProjectionVote {
   public:
+    // A mapped-memory location where a winning projection was found, for cheap re-probing.
+    struct Hit {
+        uint64_t tag = 0;
+        size_t offset = 0;
+    };
+
     // `floats` is 16-byte aligned memory; `aspect` is the scene depth's long over short side.
-    void scan(const float* floats, size_t count, float aspect, DepthRange range);
-    bool best(Projection* out, float* near, float* far) const;
+    // When `tag != 0`, records the byte offsets (`baseOffset` + matrix offset) of matches.
+    void scan(const float* floats, size_t count, float aspect, DepthRange range, uint64_t tag = 0,
+              size_t baseOffset = 0);
+    bool best(Projection* out, float* near, float* far, std::vector<Hit>* hits = nullptr) const;
     void clear() { seen_.clear(); }
 
   private:
     struct Seen {
+        static constexpr uint8_t kMaxHits = 4;
         Projection p;
         float near = 0;
         float far = 0;
         uint32_t count = 0;
+        Hit hits[kMaxHits] = {};
+        uint8_t hitCount = 0;
     };
     // fovY in 0.1°, aspect in 0.001, near and far in 1/1000 of their log2.
     using Key = std::tuple<int, int, int, int>;

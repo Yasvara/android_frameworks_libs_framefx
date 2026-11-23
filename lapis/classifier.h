@@ -119,6 +119,7 @@ struct GlassCut {
     uint8_t kind;
     uint8_t refused;
     bool armed;
+    bool held;
     int32_t step;
     uint32_t draw;
     ImageId target;

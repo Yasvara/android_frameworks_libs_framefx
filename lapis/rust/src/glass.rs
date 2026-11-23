@@ -47,13 +47,23 @@ pub struct GlassCut {
     pub refused: u8,
     /// Held still for long enough: the recorder acts on it.
     pub armed: bool,
+    /// Riding out an odd frame via patience: keep the armed cut, never index this frame's steps.
+    pub held: bool,
     /// The step: the pass to split (in pass), the pass to copy before (own pass), the copy.
+    /// Negative when none or when `held`.
     pub step: i32,
     /// In pass: the draw to split at.
     pub draw: u32,
     /// The colour target the opaque scene is in (or the refraction copy's destination).
     pub target: ImageId,
 }
+
+const _: () = assert!(
+    core::mem::size_of::<GlassCut>() == 16
+        && core::mem::offset_of!(GlassCut, held) == 3
+        && core::mem::offset_of!(GlassCut, step) == 4
+        && core::mem::offset_of!(GlassCut, target) == 12
+);
 
 /// Frames a cut must hold before it is armed, and misses before an armed one is dropped.
 pub const STABLE_FRAMES: u32 = 8;
@@ -142,9 +152,10 @@ impl GlassTracker {
             self.same = self.same.saturating_add(1);
             self.missed = 0;
         } else if self.last.armed && self.missed < PATIENCE {
-            // An armed cut rides out a few odd frames (a loading flash, a menu).
+            // An armed cut rides out a few odd frames (a loading flash, a menu). Do not hand back
+            // the previous frame's step index: the current frame may have a different step count.
             self.missed += 1;
-            return self.last;
+            return GlassCut { held: true, step: -1, ..self.last };
         } else {
             self.same = if now.class != CLASS_NONE { 1 } else { 0 };
             self.missed = 0;
@@ -279,8 +290,14 @@ mod tests {
             assert!(!t.update(cut).armed);
         }
         assert!(t.update(cut).armed);
-        assert!(t.update(GlassCut::default()).armed);
-        assert!(t.update(cut).armed);
+        let held = t.update(GlassCut::default());
+        assert!(held.armed);
+        assert!(held.held);
+        assert_eq!(held.step, -1);
+        let resumed = t.update(cut);
+        assert!(resumed.armed);
+        assert!(!resumed.held);
+        assert_eq!(resumed.step, 2);
         for _ in 0..=PATIENCE {
             t.update(GlassCut::default());
         }

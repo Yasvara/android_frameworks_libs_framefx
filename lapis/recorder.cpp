@@ -63,10 +63,13 @@ constexpr int64_t kStatsPeriodNs = 10'000'000'000;
 constexpr uint64_t kUntonedShare = 3;
 // Armed frames presented unsplit before the log says so.
 constexpr uint32_t kSplitPatience = 120;
-// Projection scan, while engaged: bytes per present, and the rest between sweeps.
+// Projection scan, while engaged: bytes per present, fast re-probe interval of cached hit slots,
+// retry rest when not yet found, and background full-sweep refresh interval once locked.
 constexpr size_t kScanBytesPerPresent = 192 << 10;
 constexpr size_t kMaxScannedMapping = 128 << 20;
+constexpr int64_t kProbeRestNs = 1'000'000'000;
 constexpr int64_t kSweepRestNs = 5'000'000'000;
+constexpr int64_t kFullSweepRestNs = 30'000'000'000;
 
 // The entry points under each wrapper: the driver's, or the loader's where it hooks the call. The
 // same for every device of the one driver; core and KHR aliases share a slot.
@@ -767,6 +770,11 @@ void forgetPass(VkRenderPass pass) {
     if (gSplit.pass == pass) {
         gSplit.pass = VK_NULL_HANDLE;
         gSplit.resume = VK_NULL_HANDLE;
+    }
+    if (gGlass.cutPass == pass || gGlass.litPass == pass) {
+        retireGlass();
+    } else if (gGlass.refused == handleBits(pass)) {
+        gGlass.refused = 0;
     }
 }
 
@@ -4707,13 +4715,17 @@ void armGlass(const Frame& frame, const Roles& roles, VkSwapchainKHR swapchain) 
     if (GlassTrackerSize() > sizeof(gGlassTracker)) return;
     const GlassCut cut = FindGlass(frame, gImages, roles.depth, gGlassTracker);
     const std::string package = Engine::get().package();
-    if (!cut.armed || cut.step < 0) {
+    if (!cut.armed) {
         if (gGlass.kind != 0) {
             ALOGI("lapis %s: transparency cut dropped (%d)", package.c_str(), cut.refused);
             retireGlass();
         }
         return;
     }
+    // Patience held the previous frame's armed cut across an odd frame: keep gGlass as armed and
+    // never index this frame's steps with the previous frame's step index.
+    if (cut.held) return;
+    if (cut.step < 0 || static_cast<size_t>(cut.step) >= frame.steps.size()) return;
     if (allowed < 0) allowed = safety::allowed(safety::kTransparencyCut) ? 1 : 0;
     if (allowed == 0) return;
     const Step& step = frame.steps[cut.step];
@@ -4726,6 +4738,7 @@ void armGlass(const Frame& frame, const Roles& roles, VkSwapchainKHR swapchain) 
         }
         return;
     }
+    if (!step.isPass) return;
     // In one pass the cut pass is also where the lit scene ends; with transparency in a pass of
     // its own, the opaque pass is the last depth-writing one before it.
     int opaqueStep = cut.step;
@@ -4936,7 +4949,9 @@ struct State {
     bool signalsProfileRead = false;
     bool signalsProfileWritten = false;
     std::vector<std::pair<VkDeviceMemory, VkDeviceSize>> sweep;  // mappings left, next offset
+    std::vector<ProjectionVote::Hit> projHits;                   // cached winning P locations
     int64_t restUntil = 0;
+    int64_t nextFullSweep = 0;
     bool havePlanes = false;
     Projection projection;
     float near = 0;
@@ -5063,7 +5078,8 @@ bool Sampleable(const Frame& frame, ImageId id, Tap* out, bool held = false) {
     return true;
 }
 
-// Sweeps the game's mappings for P a slice at a time; one sweep, then a rest.
+// Sweeps the game's mappings for P a slice at a time; once found, cheaply re-probes the cached
+// hit slots and only runs full sweeps when hits disappear or on a slower refresh interval.
 void scanProjection(State& s, const Roles& roles, int64_t now) {
     if (now < s.restUntil) return;
     float aspect = 0;
@@ -5075,12 +5091,48 @@ void scanProjection(State& s, const Roles& roles, int64_t now) {
     }
     const DepthRange range = RangeOf(roles.reversed, GlClip());
     std::lock_guard lock(gMapLock);
+    if (s.sweep.empty() && s.havePlanes && !s.projHits.empty() && now < s.nextFullSweep) {
+        const float want = aspect >= 1.0f ? aspect : 1.0f / aspect;
+        bool valid = false;
+        for (const ProjectionVote::Hit& hit : s.projHits) {
+            const auto found = gMappings.find(reinterpret_cast<VkDeviceMemory>(hit.tag));
+            if (found == gMappings.end() || found->second.ptr == nullptr ||
+                hit.offset + 64 > found->second.size) {
+                continue;
+            }
+            const auto* m = reinterpret_cast<const float*>(found->second.ptr + hit.offset);
+            Projection p;
+            if (!AsProjection(m, false, &p) && !AsProjection(m, true, &p)) continue;
+            const float pa = p.aspect();
+            const float got = pa >= 1.0f ? pa : 1.0f / pa;
+            if (std::fabs(got / want - 1.0f) > 0.01f) continue;
+            float near, far;
+            if (!p.planes(range, &near, &far)) continue;
+            s.projection = p;
+            s.near = near;
+            s.far = far;
+            valid = true;
+        }
+        if (valid) {
+            s.restUntil = now + kProbeRestNs;
+            return;
+        }
+        s.projHits.clear();
+    }
     if (s.sweep.empty()) {
         for (const auto& [memory, m] : gMappings) {
             if (m.ptr != nullptr && m.size >= 64 && m.size <= kMaxScannedMapping) {
                 s.sweep.push_back({memory, 0});
             }
         }
+        // Popped from the back: scan smaller (more likely UBO) mappings first.
+        std::sort(s.sweep.begin(), s.sweep.end(), [](const auto& a, const auto& b) {
+            const auto fa = gMappings.find(a.first);
+            const auto fb = gMappings.find(b.first);
+            const VkDeviceSize sa = fa == gMappings.end() ? 0 : fa->second.size;
+            const VkDeviceSize sb = fb == gMappings.end() ? 0 : fb->second.size;
+            return sa > sb;
+        });
         s.vote.clear();
         if (s.sweep.empty()) {
             s.restUntil = now + kSweepRestNs;
@@ -5102,7 +5154,7 @@ void scanProjection(State& s, const Roles& roles, int64_t now) {
             continue;
         }
         s.vote.scan(reinterpret_cast<const float*>(m.ptr + offset), bytes / sizeof(float), aspect,
-                    range);
+                    range, reinterpret_cast<uintptr_t>(memory), offset);
         // Overlap by a matrix so one straddling the slice edge is still seen.
         offset += bytes > 64 ? bytes - 48 : bytes;
         budget -= std::min(budget, bytes);
@@ -5110,14 +5162,20 @@ void scanProjection(State& s, const Roles& roles, int64_t now) {
     }
     if (s.sweep.empty()) {
         const bool had = s.havePlanes;
-        s.havePlanes = s.vote.best(&s.projection, &s.near, &s.far);
+        s.havePlanes = s.vote.best(&s.projection, &s.near, &s.far, &s.projHits);
         if (s.havePlanes && !had) {
             ALOGI("lapis %s: P fovY %.1f aspect %.3f near %.3f far %.1f %s jitter (%.5f, %.5f)",
                   Engine::get().package().c_str(), s.projection.fovY(), s.projection.aspect(),
                   s.near, s.far, s.projection.rowMajor ? "row" : "col", s.projection.jx,
                   s.projection.jy);
         }
-        s.restUntil = now + kSweepRestNs;
+        if (s.havePlanes) {
+            s.restUntil = now + kProbeRestNs;
+            s.nextFullSweep = now + kFullSweepRestNs;
+        } else {
+            s.projHits.clear();
+            s.restUntil = now + kSweepRestNs;
+        }
     }
 }
 
@@ -5841,6 +5899,8 @@ void onPresent(VkQueue, const VkPresentInfoKHR* info) {
         s.swapchain = swapchain;
         s.before.clear();
         s.sweep.clear();
+        s.projHits.clear();
+        s.nextFullSweep = 0;
         s.havePlanes = false;
     }
     const bool tappable = s.tracker.update(roles, frame.width, frame.height);
