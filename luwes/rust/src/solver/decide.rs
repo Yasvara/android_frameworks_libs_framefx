@@ -285,7 +285,10 @@ pub fn decide(z: &Prepared, p: &Params) -> Solved {
             let mut ws_ = 0.0f32;
             for kk in 0..k {
                 let o = at(kk, j);
-                let mut wk = if valid[o] { (-(score[o] - smin) / ft).exp() } else { 0.0 };
+                if !valid[o] {
+                    continue;
+                }
+                let mut wk = (-(score[o] - smin) / ft).exp();
                 let bv = z.b[o];
                 if !(hypot(bv[0] - bm[j][0], bv[1] - bm[j][1]) / FIELD_SCALE <= fr) {
                     wk *= 0.0;
@@ -308,7 +311,10 @@ pub fn decide(z: &Prepared, p: &Params) -> Solved {
             let rf = z.key[at(kmin[j], j)] + 0.25;
             for kk in 0..k {
                 let o = at(kk, j);
-                let mut q = sb(e[o], p.agree_tau, p.soft_width) * (1.0 - sb(d(z.c1[o], c1m[j]), p.agree_tau, p.soft_width)) * ((z.key[o] > rf) as u8 as f64) * (valid[o] as u8 as f64);
+                if !valid[o] {
+                    continue;
+                }
+                let mut q = sb(e[o], p.agree_tau, p.soft_width) * (1.0 - sb(d(z.c1[o], c1m[j]), p.agree_tau, p.soft_width)) * ((z.key[o] > rf) as u8 as f64);
                 let mut of = 1.0 - ss(0.5, 1.5, z.r1[o]);
                 if p.mover_pixel_ownership && q > 0.5 && of < 0.5 {
                     let i = z.idx[j];

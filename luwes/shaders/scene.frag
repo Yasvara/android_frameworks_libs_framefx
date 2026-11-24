@@ -37,13 +37,19 @@ float edgeAt(vec2 uv, float z) {
 
 // The half-size occlusion at full size: the four nearest half-size pixels and the one under the
 // pixel, each counted as much as its depth agrees with the pixel's.
+float bilateralWeight(float dz, float invScale) {
+    float r = dz * invScale;
+    return 1.0 / (1.0 + r * r);
+}
+
 float occlusionAt(vec2 uv, float z) {
     vec2 cell = 2.0 * P(0).zw;
+    float invScale = 1.0 / max(0.05 * z, 1e-4);
     float sum = textureLod(occlusion, uv, 0.0).r;
     float weight = 1.0;
     for (int i = 0; i < 4; i++) {
         vec2 o = vec2(i == 0 || i == 1 ? -1.0 : 1.0, i == 0 || i == 2 ? -1.0 : 1.0) * cell;
-        float w = exp(-abs(depthAt(uv + o) - z) / max(0.05 * z, 1e-4));
+        float w = bilateralWeight(depthAt(uv + o) - z, invScale);
         sum += textureLod(occlusion, uv + o, 0.0).r * w;
         weight += w;
     }
@@ -54,12 +60,13 @@ float occlusionAt(vec2 uv, float z) {
 // much as its depth agrees with the pixel's, so one ray a pixel reads as a soft, edge-true field.
 vec4 tracedAt(sampler2D image, vec2 uv, float z) {
     vec2 cell = 2.0 * P(0).zw;
+    float invScale = 1.0 / max(0.03 * z, 1e-4);
     vec4 sum = vec4(0.0);
     float weight = 0.0;
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
             vec2 at = uv + vec2(x, y) * cell;
-            float w = exp(-abs(depthAt(at) - z) / max(0.03 * z, 1e-4)) *
+            float w = bilateralWeight(depthAt(at) - z, invScale) *
                     (x == 0 && y == 0 ? 2.0 : 1.0);
             sum += textureLod(image, at, 0.0) * w;
             weight += w;
@@ -71,11 +78,12 @@ vec4 tracedAt(sampler2D image, vec2 uv, float z) {
 // The quarter-size bounced light at full size, the same way.
 vec3 bouncedAt(vec2 uv, float z) {
     vec2 cell = 4.0 * P(0).zw;
+    float invScale = 1.0 / max(0.05 * z, 1e-4);
     vec3 sum = textureLod(bounced, uv, 0.0).rgb;
     float weight = 1.0;
     for (int i = 0; i < 4; i++) {
         vec2 o = vec2(i == 0 || i == 1 ? -1.0 : 1.0, i == 0 || i == 2 ? -1.0 : 1.0) * cell;
-        float w = exp(-abs(depthAt(uv + o) - z) / max(0.05 * z, 1e-4));
+        float w = bilateralWeight(depthAt(uv + o) - z, invScale);
         sum += textureLod(bounced, uv + o, 0.0).rgb * w;
         weight += w;
     }

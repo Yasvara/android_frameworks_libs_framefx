@@ -842,19 +842,29 @@ pub fn assign_layers(prev: &Image, cur: &Image, fld: &crate::grid::Field, f2: Op
             let mut o = prot;
             strct.d[i] |= c_ || u_ || o;
             let (rx, ry) = (px + t * v[0], py + t * v[1]);
-            let (mut l0, mut l1) = if p.layer_cubic { (cubic_tap(prev, rx, ry).0, cubic_tap(cur, qx, qy).0) } else { (tex(prev, rx, ry), tex(cur, qx, qy)) };
             let (in_q, in_r) = (in_frame(qx, qy), in_frame(rx, ry));
+            if !(o || c_ || u_) && !(in_r && !in_q) {
+                continue;
+            }
             let es_r = d(cur.at(i % w, i / w), prev.at(i % w, i / w));
             let ent = o && in_q && !in_r && es_r > 0.015;
-            let ax = if v[0] > 1e-4 { rx / v[0] } else if v[0] < -1e-4 { (rx - (w - 1) as f32) / v[0] } else { 1.0 };
-            let ay = if v[1] > 1e-4 { ry / v[1] } else if v[1] < -1e-4 { (ry - (h - 1) as f32) / v[1] } else { 1.0 };
-            let al = ax.min(ay).clamp(0.0, 1.0);
-            let (qxc, qyc) = (rx - al * v[0], ry - al * v[1]);
-            let ext = in_r && !in_q && samp(&ms[li], qxc, qyc) > 0.5 && es_r > 0.015;
-            o |= ext;
-            if ext {
-                mq = samp(&ms[li], qxc, qyc);
+            let mut ext = false;
+            if in_r && !in_q && es_r > 0.015 {
+                let ax = if v[0] > 1e-4 { rx / v[0] } else if v[0] < -1e-4 { (rx - (w - 1) as f32) / v[0] } else { 1.0 };
+                let ay = if v[1] > 1e-4 { ry / v[1] } else if v[1] < -1e-4 { (ry - (h - 1) as f32) / v[1] } else { 1.0 };
+                let al = ax.min(ay).clamp(0.0, 1.0);
+                let (qxc, qyc) = (rx - al * v[0], ry - al * v[1]);
+                let mq_c = samp(&ms[li], qxc, qyc);
+                if mq_c > 0.5 {
+                    ext = true;
+                    mq = mq_c;
+                }
             }
+            o |= ext;
+            if !(o || c_ || u_) {
+                continue;
+            }
+            let (mut l0, mut l1) = if p.layer_cubic { (cubic_tap(prev, rx, ry).0, cubic_tap(cur, qx, qy).0) } else { (tex(prev, rx, ry), tex(cur, qx, qy)) };
             if ent {
                 l0 = l1;
             }

@@ -197,13 +197,13 @@ pub fn prepare(inp: &PairInputs, t: f32, mode: Mode, p: &Params) -> Prepared {
         let (x, y) = pxy(i);
         (((x / FIELD_TEXEL).floor() as i64).clamp(0, fw as i64 - 1), ((y / FIELD_TEXEL).floor() as i64).clamp(0, fh as i64 - 1))
     };
-    let nbr: Vec<[V2; 9]> = (0..n_px).map(|i| {
-        let (tx, ty) = texel(i);
+    let nbr_tile: Grid<[V2; 9]> = Grid::from_fn(fw, fh, |tx, ty| {
         std::array::from_fn(|l| {
-            let tv = fld.atc(tx + (l % 3) as i64 - 1, ty + (l / 3) as i64 - 1);
+            let tv = fld.atc(tx as i64 + (l % 3) as i64 - 1, ty as i64 + (l / 3) as i64 - 1);
             [tv[0] * FIELD_SCALE, tv[1] * FIELD_SCALE]
         })
-    }).collect();
+    });
+    let med_tile: Grid<V2> = Grid::from_fn(fw, fh, |tx, ty| vmed9(&nbr_tile.at(tx, ty)));
     let mut vecs: Vec<Vec<V2>> = vec![b_bil.clone(), it.iter().map(|v| [v[0], v[1]]).collect()];
     let mut zws: Vec<Vec<[f32; 2]>> = vec![fp.iter().map(|v| [v[2], v[3]]).collect(), it.iter().map(|v| [v[2], v[3]]).collect()];
     for l in 0..9 {
@@ -232,24 +232,38 @@ pub fn prepare(inp: &PairInputs, t: f32, mode: Mode, p: &Params) -> Prepared {
         let mut pickz: Vec<Vec<[f32; 2]>> = vec![Vec::with_capacity(n_px); p.projected_candidates];
         let ded = f(p.dedupe_dist);
         let lim = 16.0 + p.projection_margin;
+        let tile_land: Grid<(f64, f64, V2, [f32; 2])> = Grid::from_fn(fw, fh, |tx, ty| {
+            let tv = fld.at(tx, ty);
+            let b = [tv[0] * FIELD_SCALE, tv[1] * FIELD_SCALE];
+            let cx = (tx * 32) as f64 + 16.0 - 0.5;
+            let cy = (ty * 32) as f64 + 16.0 - 0.5;
+            (cx + (b[0] * sg) as f64, cy + (b[1] * sg) as f64, b, [tv[2], tv[3]])
+        });
+        let side = (2 * rw + 1) as usize;
+        let mut cand: Vec<(f64, V2, [f32; 2])> = Vec::with_capacity(side * side);
+        let mut ok: Vec<bool> = Vec::with_capacity(side * side);
         for i in 0..n_px {
             let (px, py) = pxy(i);
             let (tx, ty) = texel(i);
-            let mut cand: Vec<(f64, V2, [f32; 2])> = Vec::new();
+            cand.clear();
+            ok.clear();
             for dy in -rw..=rw {
+                let ny = ty + dy;
                 for dx in -rw..=rw {
-                    let tv = fld.atc(tx + dx, ty + dy);
-                    let b = [tv[0] * FIELD_SCALE, tv[1] * FIELD_SCALE];
-                    let cx = ((tx + dx) * 32) as f64 + 16.0 - 0.5;
-                    let cy = ((ty + dy) * 32) as f64 + 16.0 - 0.5;
-                    let lx = cx + (b[0] * sg) as f64;
-                    let ly = cy + (b[1] * sg) as f64;
-                    let outside = tx + dx < 0 || tx + dx >= fw as i64 || ty + dy < 0 || ty + dy >= fh as i64;
-                    let dist = if outside { f64::INFINITY } else { (px as f64 - lx).abs().max((py as f64 - ly).abs()) };
-                    cand.push((dist, b, [tv[2], tv[3]]));
+                    let nx = tx + dx;
+                    if nx < 0 || nx >= fw as i64 || ny < 0 || ny >= fh as i64 {
+                        let tv = fld.atc(nx, ny);
+                        let b = [tv[0] * FIELD_SCALE, tv[1] * FIELD_SCALE];
+                        cand.push((f64::INFINITY, b, [tv[2], tv[3]]));
+                        ok.push(false);
+                    } else {
+                        let (lx, ly, b, z) = tile_land.at(nx as usize, ny as usize);
+                        let dist = (px as f64 - lx).abs().max((py as f64 - ly).abs());
+                        cand.push((dist, b, z));
+                        ok.push(dist <= lim);
+                    }
                 }
             }
-            let mut ok: Vec<bool> = cand.iter().map(|c| c.0 <= lim).collect();
             for pk in 0..p.projected_candidates {
                 let mut j = 0;
                 let mut bd = f64::INFINITY;
@@ -396,14 +410,19 @@ pub fn prepare(inp: &PairInputs, t: f32, mode: Mode, p: &Params) -> Prepared {
             e_full.push(cv::blur(&ef, 2 * p.dense_cost_box + 1));
         }
         for (j, &i) in idx.iter().enumerate() {
-            let (x, y) = pxy(i);
             let bv = vecs[kk][i];
-            let (ax, ay, cx, cy) = ends(bv, x, y);
-            let cc1 = tex(cur, ax, ay);
-            let cc0 = tex(&prev, cx, cy);
             let o = kk * n + j;
             b[o] = bv;
             zw[o] = zws[kk][i];
+            lvv[o] = lvl(sub(bv, b_bil[i]));
+            lb[o] = lvl(bv);
+            if !kept[o] {
+                continue;
+            }
+            let (x, y) = pxy(i);
+            let (ax, ay, cx, cy) = ends(bv, x, y);
+            let cc1 = tex(cur, ax, ay);
+            let cc0 = tex(&prev, cx, cy);
             c1[o] = cc1;
             c0[o] = cc0;
             e[o] = if box_e { e_full[kk].d[i] } else { d(cc1, cc0) / g_scale };
@@ -411,18 +430,22 @@ pub fn prepare(inp: &PairInputs, t: f32, mode: Mode, p: &Params) -> Prepared {
             s0[o] = d(tex(cur, cx, cy), cc0) / g_scale;
             let fk = if dense { fat(ax, ay) } else { let v = field_at(&fld, ax, ay); [v[0], v[1]] };
             r1[o] = lvl(sub(fk, bv));
-            lvv[o] = lvl(sub(bv, b_bil[i]));
-            lb[o] = lvl(bv);
         }
     }
     for (j, &i) in idx.iter().enumerate() {
-        let med = vmed9(&nbr[i]);
+        let (tx, ty) = texel(i);
+        let (txu, tyu) = (tx as usize, ty as usize);
+        let med = med_tile.at(txu, tyu);
+        let nb_i = &nbr_tile.at(txu, tyu);
         for kk in 0..k {
             let o = kk * n + j;
+            if !kept[o] {
+                continue;
+            }
             key[o] = lvl(sub(b[o], med));
             let mut s = 0u8;
             for l in 0..9 {
-                s += (lvl(sub(nbr[i][l], b[o])) <= cons) as u8;
+                s += (lvl(sub(nb_i[l], b[o])) <= cons) as u8;
             }
             sup[o] = s;
         }

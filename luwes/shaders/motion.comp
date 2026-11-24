@@ -254,21 +254,35 @@ void consider(inout Best best, vec4 quads[4], ivec2 origin, vec2 v, int i, int c
 }
 #endif
 
+const int kHistSide = 2 * kMaxRadius + 1;
+const int kHistBins = kHistSide * kHistSide;
+shared uint sHist[kHistBins];
+shared uint sFirstIdx[kHistBins];
+
 void dominant() {
-    // Each lane tallies, for its share of coarsest blocks, how many blocks share that vector.
+    uint l = gl_LocalInvocationIndex;
     int radius = min(int(P(0).y), kMaxRadius);
     ivec2 size = textureSize(field, 0);
     int n = size.x * size.y;
-    uint best = 0u;
-    for (int i = int(lane()); i < n; i += 64) {
+    for (uint b = l; b < uint(kHistBins); b += 64u) {
+        sHist[b] = 0u;
+        sFirstIdx[b] = 0u;
+    }
+    barrier();
+    for (int i = int(l); i < n; i += 64) {
         ivec2 v = ivec2(round(texelFetch(field, ivec2(i % size.x, i / size.x), 0).xy));
         if (v == ivec2(0) || any(greaterThan(abs(v), ivec2(radius)))) continue;
-        uint votes = 0u;
-        for (int j = 0; j < n; j++) {
-            ivec2 w = ivec2(round(texelFetch(field, ivec2(j % size.x, j / size.x), 0).xy));
-            votes += w == v ? 1u : 0u;
+        int bin = (v.y + kMaxRadius) * kHistSide + (v.x + kMaxRadius);
+        atomicAdd(sHist[bin], 1u);
+        atomicMax(sFirstIdx[bin], uint(i));
+    }
+    barrier();
+    uint best = 0u;
+    for (uint b = l; b < uint(kHistBins); b += 64u) {
+        uint votes = sHist[b];
+        if (votes > 0u) {
+            best = max(best, (votes << 16) | sFirstIdx[b]);
         }
-        best = max(best, votes << 16 | uint(i));
     }
     best = maxOf(best);
     if (lane() != 0u) return;

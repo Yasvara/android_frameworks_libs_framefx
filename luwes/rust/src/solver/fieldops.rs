@@ -10,7 +10,7 @@ use super::{d, f, tex, Gain, Params};
 use crate::cv;
 use crate::grid::{hypot, median, Field, Grid, Image, Mask, V2, FIELD_SCALE, FIELD_TEXEL_I};
 use crate::layer::LayerField;
-use crate::motion::{copy_pad, distinct, pyramid, shifted, Level};
+use crate::motion::{copy_pad, distinct, pyramid, Level};
 
 fn vmed_n(n: &[V2]) -> V2 {
     let mut best = 0;
@@ -42,8 +42,20 @@ pub fn median_repair(prev: &Image, cur: &Image, fld: &Field, gain: &Gain, cut_r:
     let real = (h.div_ceil(32), w.div_ceil(32));
     let l = Level::new(&pc[1], &pp[1], 8, rpx1);
     let f0 = copy_pad(&fld.map(|t| [t[0], t[1]]), real);
-    let lanes: Vec<Grid<V2>> = (-2i64..=2).flat_map(|dy| (-2i64..=2).map(move |dx| (dx, dy))).map(|(dx, dy)| shifted(&f0, dx, dy, real)).collect();
-    let med = Grid::from_fn(f0.w, f0.h, |x, y| vmed_n(&lanes.iter().map(|g| g.at(x, y)).collect::<Vec<_>>()));
+    let (rh, rw) = real;
+    let med = Grid::from_fn(f0.w, f0.h, |x, y| {
+        let mut win = [[0.0f32; 2]; 25];
+        let mut idx = 0;
+        for dy in -2i64..=2 {
+            let yi = (y as i64 + dy).clamp(0, rh as i64 - 1) as usize;
+            for dx in -2i64..=2 {
+                let xi = (x as i64 + dx).clamp(0, rw as i64 - 1) as usize;
+                win[idx] = f0.at(xi, yi);
+                idx += 1;
+            }
+        }
+        vmed_n(&win)
+    });
     let e0 = l.sad(&f0);
     let e_med = l.sad(&med);
     let kg = 0.01f32;
@@ -97,41 +109,72 @@ pub fn extend_entering(fld: &Field, h: usize, w: usize, ov: f64, dom_ext: bool) 
     let mut v = fld.map(|t| [t[0], t[1]]);
     let mut wc = fld.map(|t| t[3]);
     let mut cv_ = valid.clone();
-    for _ in 0..fh.max(fw) {
+    let mut frontier: Vec<(usize, usize)> = Vec::new();
+    let mut queued = Grid::new(fw, fh, false);
+    for y in 0..fh {
+        for x in 0..fw {
+            if cv_.at(x, y) {
+                continue;
+            }
+            let mut touches = false;
+            for dy in -1i64..=1 {
+                for dx in -1i64..=1 {
+                    let (nx, ny) = (x as i64 + dx, y as i64 + dy);
+                    if nx >= 0 && ny >= 0 && (nx as usize) < fw && (ny as usize) < fh && cv_.at(nx as usize, ny as usize) {
+                        touches = true;
+                    }
+                }
+            }
+            if touches {
+                queued.set(x, y, true);
+                frontier.push((x, y));
+            }
+        }
+    }
+    let mut updates: Vec<(usize, usize, V2, f32)> = Vec::new();
+    while !frontier.is_empty() {
         if (0..fw * fh).all(|i| !real.d[i] || cv_.d[i]) {
             break;
         }
-        let snap_v = v.clone();
-        let snap_w = wc.clone();
-        let snap_m = cv_.clone();
-        for y in 0..fh {
-            for x in 0..fw {
-                if snap_m.at(x, y) {
-                    continue;
-                }
-                let (mut sv, mut sw, mut sm) = ([0.0f32; 2], 0.0f32, 0.0f32);
-                for dy in -1i64..=1 {
-                    for dx in -1i64..=1 {
-                        let (nx, ny) = (x as i64 + dx, y as i64 + dy);
-                        let (a, b, m) = if nx < 0 || ny < 0 || nx >= fw as i64 || ny >= fh as i64 {
-                            ([0.0f32; 2], 0.0f32, 0.0f32)
-                        } else {
-                            let (nx, ny) = (nx as usize, ny as usize);
-                            let mk = snap_m.at(nx, ny) as u8 as f32;
-                            let vv = snap_v.at(nx, ny);
-                            ([vv[0] * mk, vv[1] * mk], snap_w.at(nx, ny) * mk, mk)
-                        };
-                        sv[0] += a[0];
-                        sv[1] += a[1];
-                        sw += b;
-                        sm += m;
+        updates.clear();
+        for &(x, y) in &frontier {
+            let (mut sv, mut sw, mut sm) = ([0.0f32; 2], 0.0f32, 0.0f32);
+            for dy in -1i64..=1 {
+                for dx in -1i64..=1 {
+                    let (nx, ny) = (x as i64 + dx, y as i64 + dy);
+                    if nx >= 0 && ny >= 0 && (nx as usize) < fw && (ny as usize) < fh {
+                        let (nx, ny) = (nx as usize, ny as usize);
+                        if cv_.at(nx, ny) {
+                            let vv = v.at(nx, ny);
+                            sv[0] += vv[0];
+                            sv[1] += vv[1];
+                            sw += wc.at(nx, ny);
+                            sm += 1.0;
+                        }
                     }
                 }
-                if sm > 0.0 {
-                    let dn = sm.max(1.0);
-                    v.set(x, y, [sv[0] / dn, sv[1] / dn]);
-                    wc.set(x, y, sw / dn);
-                    cv_.set(x, y, true);
+            }
+            if sm > 0.0 {
+                updates.push((x, y, [sv[0] / sm, sv[1] / sm], sw / sm));
+            }
+        }
+        frontier.clear();
+        for &(x, y, nv, nw) in &updates {
+            v.set(x, y, nv);
+            wc.set(x, y, nw);
+            cv_.set(x, y, true);
+        }
+        for &(x, y, _, _) in &updates {
+            for dy in -1i64..=1 {
+                for dx in -1i64..=1 {
+                    let (nx, ny) = (x as i64 + dx, y as i64 + dy);
+                    if nx >= 0 && ny >= 0 && (nx as usize) < fw && (ny as usize) < fh {
+                        let (nx, ny) = (nx as usize, ny as usize);
+                        if !cv_.at(nx, ny) && !queued.at(nx, ny) {
+                            queued.set(nx, ny, true);
+                            frontier.push((nx, ny));
+                        }
+                    }
                 }
             }
         }

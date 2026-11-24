@@ -107,7 +107,7 @@ pub fn dist(a: Rgb, b: Rgb) -> f32 {
 /// float32 hypot (correctly rounded through float64).
 #[inline]
 pub fn hypot(x: f32, y: f32) -> f32 {
-    (x as f64).hypot(y as f64) as f32
+    ((x as f64) * (x as f64) + (y as f64) * (y as f64)).sqrt() as f32
 }
 
 /// Hermite step on float32 edges.

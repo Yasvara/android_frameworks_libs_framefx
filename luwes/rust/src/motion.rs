@@ -354,19 +354,29 @@ fn consider_offsets(l: &Level, base: &Grid<V2>, offs: &[V2], pred: &Grid<V2>, la
 }
 
 fn dominant(top: &Grid<V2>, radius: i32) -> V2 {
-    let v: Vec<(i64, i64)> = top.d.iter().map(|a| (a[0].round_ties_even() as i64, a[1].round_ties_even() as i64)).collect();
-    let n = v.len();
-    let mut best: i64 = 0;
-    for i in 0..n {
-        if (v[i].0 == 0 && v[i].1 == 0) || v[i].0.abs() > radius as i64 || v[i].1.abs() > radius as i64 {
+    let r = radius as i64;
+    let side = (2 * r + 1) as usize;
+    let mut counts = vec![0i64; side * side];
+    let mut last_idx = vec![0i64; side * side];
+    let n = top.d.len();
+    for (i, a) in top.d.iter().enumerate() {
+        let (vx, vy) = (a[0].round_ties_even() as i64, a[1].round_ties_even() as i64);
+        if (vx == 0 && vy == 0) || vx.abs() > r || vy.abs() > r {
             continue;
         }
-        let votes = v.iter().filter(|&&u| u == v[i]).count() as i64;
-        best = best.max(votes << 16 | i as i64);
+        let bin = ((vy + r) as usize) * side + ((vx + r) as usize);
+        counts[bin] += 1;
+        last_idx[bin] = i as i64;
+    }
+    let mut best: i64 = 0;
+    for bin in 0..counts.len() {
+        if counts[bin] > 0 {
+            best = best.max((counts[bin] << 16) | last_idx[bin]);
+        }
     }
     if (best >> 16) * 10 >= n as i64 && best != 0 {
-        let u = v[(best & 0xffff) as usize];
-        [u.0 as f32, u.1 as f32]
+        let a = top.d[(best & 0xffff) as usize];
+        [a[0].round_ties_even(), a[1].round_ties_even()]
     } else {
         [0.0, 0.0]
     }
@@ -470,7 +480,7 @@ fn subpel_level0(c0: &Plane, p0: &Plane, f: &Grid<V2>, real0: (usize, usize)) ->
                 bv = c;
             }
         }
-        let e0 = l0.sad1(bx, by, bv);
+        let e0 = best;
         let mut off = [0.0f32; 2];
         for ax in 0..2 {
             let mut m = bv;
