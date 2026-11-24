@@ -34,11 +34,18 @@ float fastLanczos(float base) {
     return t * y2;
 }
 
+vec3 sanitizeHdr(vec3 c) {
+    vec3 clamped = clamp(c, vec3(0.0), vec3(65504.0));
+    return mix(clamped, vec3(0.0), isnan(c));
+}
+
 vec3 tonemap(vec3 c) {
+    c = sanitizeHdr(c);
     return c / (1.0 + max(c.r, max(c.g, c.b)));
 }
 
 vec3 untonemap(vec3 c) {
+    c = mix(clamp(c, vec3(0.0), vec3(0.999)), vec3(0.0), isnan(c));
     return c / max(1.0 - max(c.r, max(c.g, c.b)), 1e-3);
 }
 
@@ -53,7 +60,8 @@ void main() {
     vec2 jitter = P(2).xy;
 
     vec2 jitterUv = clamp(hruv + jitter * P(0).zw, 0.0, 1.0);
-    ivec2 inputPos = ivec2(jitterUv * renderSize);
+    ivec2 last = max(ivec2(renderSize) - 1, ivec2(0));
+    ivec2 inputPos = clamp(ivec2(jitterUv * renderSize), ivec2(0), last);
     vec3 mda = textureLod(motionClip, jitterUv, 0.0).xyz;
     vec2 motion = mda.xy;
     vec2 prevUv = clamp(hruv - 0.5 * motion, 0.0, 1.0);
@@ -68,8 +76,8 @@ void main() {
     float curvebias = mix(-2.0, -3.0, clamp(motionLen * 0.02, 0.0, 1.0));
 
     vec2 offset = vec2(inputPos) + 0.5 - jitter - hruv * renderSize;
-    ivec2 last = ivec2(renderSize) - 1;
     vec4 upsampled = vec4(0.0);
+    vec3 centerTap = vec3(0.0);
     vec3 boxCenter = vec3(0.0);
     vec3 boxVar = vec3(0.0);
     float boxWeight = 0.0;
@@ -78,6 +86,7 @@ void main() {
     const ivec2 kTaps[5] = ivec2[5](ivec2(0, 1), ivec2(1, 0), ivec2(-1, 0), ivec2(0, 0), ivec2(0, -1));
     for (int k = 0; k < 5; k++) {
         vec3 c = tonemap(texelFetch(jittered, clamp(inputPos + kTaps[k], ivec2(0), last), 0).rgb);
+        if (k == 3) centerTap = c;
         vec2 o = offset + vec2(kTaps[k]);
         float d = dot(o, o);
         float weight = fastLanczos(clamp(d * kernelbias2, 0.0, 1.0));
@@ -89,9 +98,14 @@ void main() {
         boxVar += c * c * bw;
         boxWeight += bw;
     }
-    boxCenter /= boxWeight;
-    boxVar = sqrt(abs(boxVar / boxWeight - boxCenter * boxCenter));
-    upsampled.rgb = clamp(upsampled.rgb / upsampled.w, boxMin - 0.075, boxMax + 0.075);
+    float invBoxW = 1.0 / max(boxWeight, 1e-6);
+    boxCenter *= invBoxW;
+    boxVar = sqrt(max(boxVar * invBoxW - boxCenter * boxCenter, vec3(0.0)));
+    upsampled.rgb = upsampled.w > 1e-5
+            ? clamp(upsampled.rgb / upsampled.w, boxMin - 0.075, boxMax + 0.075)
+            : centerTap;
+    historyColor = mix(clamp(historyColor, vec3(0.0), vec3(0.999)), upsampled.rgb,
+                       isnan(historyColor));
     // Lower than SGSR 2's own third: games dither transparency and leave it to their
     // anti-aliasing to average, which takes more frames than SGSR 2 keeps.
     upsampled.w *= P(4).z;
@@ -117,8 +131,8 @@ void main() {
 
     const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
     vec4 s = textureLod(base, hruv, 0.0);
-    float yHi = dot(untonemap(hi), kLuma);
-    float yR = dot(textureLod(resolved, hruv, 0.0).rgb, kLuma);
+    float yHi = max(dot(untonemap(hi), kLuma), 0.0);
+    float yR = max(dot(sanitizeHdr(textureLod(resolved, hruv, 0.0).rgb), kLuma), 0.0);
     float eps = 1e-3 + 0.01 * yR;
     float gain = clamp(pow((yHi + eps) / (yR + eps), P(4).x), 1.0 / P(4).y, P(4).y);
     scene = vec4(clamp(s.rgb * gain, 0.0, 1.0), s.a);

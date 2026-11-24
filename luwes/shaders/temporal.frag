@@ -48,6 +48,8 @@ void main() {
         w += clamp(sep / (abs(maxC - topRight4) + kEpsilon), 0.0, 1.0);
         depthclip = clamp(1.0 - w * 0.25, 0.0, 1.0);
     }
-    vec2 m = decodeVelocity(texelFetch(velocity, ivec2(gl_FragCoord.xy), 0).xy);
+    ivec2 velLast = max(textureSize(velocity, 0) - 1, ivec2(0));
+    vec2 m = decodeVelocity(
+            texelFetch(velocity, clamp(ivec2(gl_FragCoord.xy), ivec2(0), velLast), 0).xy);
     motionClip = vec4(2.0 * m, depthclip, 0.0);
 }

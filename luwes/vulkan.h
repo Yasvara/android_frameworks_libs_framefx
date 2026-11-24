@@ -7,6 +7,7 @@
 
 #include <framefx/hook.h>
 
+#include <cstdint>
 #include <vector>
 
 // Luwes on Vulkan, native on the game's own device: motion from a block search on a luma pyramid
@@ -47,5 +48,8 @@ PFN_vkVoidFunction intercept(const char* name, PFN_vkVoidFunction next);
 // The images the game draws into, when they are not the swapchain's own, and the size shown.
 bool gameImages(VkDevice device, VkSwapchainKHR swapchain, std::vector<VkImage>* images,
                 VkExtent2D* shown);
+// Drains in-flight Luwes work referencing `imageId` and drops cached views of it before the game
+// destroys the image or frees its backing memory.
+void releaseImage(VkDevice device, uint32_t imageId, VkImage image = VK_NULL_HANDLE);
 
 }  // namespace framefx::luwes::vulkan

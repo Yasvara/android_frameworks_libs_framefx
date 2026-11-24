@@ -55,7 +55,7 @@ vec4 downsample(vec2 uv) {
             total += w;
         }
     }
-    return clamp(sum / total, 0.0, 1.0);
+    return clamp(sum / max(total, 1e-5), 0.0, 1.0);
 }
 
 void main() {
@@ -95,7 +95,7 @@ void main() {
         float sum = abs(left.x) + abs(left.y) + abs(left.z) + abs(left.w) + abs(right.x) +
                 abs(right.y) + abs(right.z) + abs(right.w) + abs(upDown.x) + abs(upDown.y) +
                 abs(upDown.z) + abs(upDown.w);
-        float stdev = 2.181818 / sum;
+        float stdev = 2.181818 / max(sum, 1e-5);
 
         vec2 aWY = weightY(pl.x, pl.y + 1.0, upDown.x, stdev);
         aWY += weightY(pl.x - 1.0, pl.y + 1.0, upDown.y, stdev);
@@ -110,7 +110,7 @@ void main() {
         aWY += weightY(pl.x - 2.0, pl.y, right.z, stdev);
         aWY += weightY(pl.x - 1.0, pl.y, right.w, stdev);
 
-        float finalY = aWY.y / aWY.x;
+        float finalY = abs(aWY.x) > 1e-5 ? aWY.y / aWY.x : c.w;
         float maxY = max(max(left.y, left.z), max(right.x, right.w));
         float minY = min(min(left.y, left.z), min(right.x, right.w));
         finalY = clamp((P(2).y > 0.0 ? P(2).y : kEdgeSharpness) * finalY, minY, maxY);

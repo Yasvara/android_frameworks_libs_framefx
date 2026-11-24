@@ -43,6 +43,7 @@
 #include "lapis/signals.h"
 #include "luwes/capture.h"
 #include "luwes/afme.h"
+#include "luwes/vulkan.h"
 #include "src/engine.h"
 #include "src/safety.h"
 #include "src/survey.h"
@@ -588,6 +589,9 @@ std::unordered_map<ImageId, VkComponentMapping> gSwizzles;
 // A game's descriptor set -> its copy with the translation's atlas in it.
 std::unordered_map<VkDescriptorSet, VkDescriptorSet> gAlihClones;
 std::unordered_map<VkDeviceMemory, std::pair<VkDevice, uint32_t>> gMemoryTypes;
+std::unordered_map<ImageId, VkDeviceMemory> gImageMemory;
+std::unordered_map<VkDeviceMemory, std::vector<ImageId>> gMemoryImages;
+void forgetTapsFor(ImageId id);
 std::unordered_map<VkRenderPass, RenderPassDesc> gRenderPasses;
 std::unordered_map<VkFramebuffer, std::vector<VkImageView>> gFramebuffers;
 std::unordered_map<VkPipeline, PipelineDesc> gPipelines;
@@ -819,14 +823,27 @@ VKAPI_ATTR VkResult CreateImage(VkDevice device, const VkImageCreateInfo* info,
 }
 
 VKAPI_ATTR void DestroyImage(VkDevice device, VkImage image, const VkAllocationCallbacks* allocator) {
+    ImageId id = 0;
     {
         std::lock_guard lock(gLock);
         const auto found = gImageIds.find(image);
         if (found != gImageIds.end()) {
-            gImages.erase(found->second);
-            gHandles.erase(found->second);
+            id = found->second;
+            gImages.erase(id);
+            gHandles.erase(id);
             gImageIds.erase(found);
+            const auto mem = gImageMemory.find(id);
+            if (mem != gImageMemory.end()) {
+                auto& list = gMemoryImages[mem->second];
+                list.erase(std::remove(list.begin(), list.end(), id), list.end());
+                if (list.empty()) gMemoryImages.erase(mem->second);
+                gImageMemory.erase(mem);
+            }
         }
+    }
+    if (id != 0) {
+        forgetTapsFor(id);
+        luwes::vulkan::releaseImage(device, id, image);
     }
     gNext.DestroyImage(device, image, allocator);
 }
@@ -896,9 +913,24 @@ VKAPI_ATTR void FreeMemory(VkDevice device, VkDeviceMemory memory,
         gMappings.erase(memory);
         gMemorySizes.erase(memory);
     }
+    std::vector<std::pair<ImageId, VkImage>> bound;
     {
         std::lock_guard lock(gLock);
         gMemoryTypes.erase(memory);
+        const auto found = gMemoryImages.find(memory);
+        if (found != gMemoryImages.end()) {
+            bound.reserve(found->second.size());
+            for (ImageId id : found->second) {
+                const auto handle = gHandles.find(id);
+                bound.emplace_back(id, handle != gHandles.end() ? handle->second : VK_NULL_HANDLE);
+                gImageMemory.erase(id);
+            }
+            gMemoryImages.erase(found);
+        }
+    }
+    for (const auto& [id, handle] : bound) {
+        forgetTapsFor(id);
+        luwes::vulkan::releaseImage(device, id, handle);
     }
     gNext.FreeMemory(device, memory, allocator);
 }
@@ -908,6 +940,16 @@ void noteBound(VkImage image, VkDeviceMemory memory) {
     Image* i = imageOf(idOfImage(image));
     const auto m = gMemoryTypes.find(memory);
     if (i == nullptr || m == gMemoryTypes.end()) return;
+    const auto prev = gImageMemory.find(i->id);
+    if (prev != gImageMemory.end() && prev->second != memory) {
+        auto& oldList = gMemoryImages[prev->second];
+        oldList.erase(std::remove(oldList.begin(), oldList.end(), i->id), oldList.end());
+        if (oldList.empty()) gMemoryImages.erase(prev->second);
+    }
+    if (prev == gImageMemory.end() || prev->second != memory) {
+        gImageMemory[i->id] = memory;
+        gMemoryImages[memory].push_back(i->id);
+    }
     i->memoryType = static_cast<int>(m->second.second);
     const auto d = gDevices.find(m->second.first);
     if (d != gDevices.end() && m->second.second < d->second.memory.memoryTypeCount) {
@@ -4972,6 +5014,38 @@ struct State {
 std::mutex gStateLock;
 State gState;
 
+void forgetTap(Tap& t, ImageId id) {
+    if (t.id == id) t = Tap();
+}
+
+void forgetTapsFor(ImageId id) {
+    if (id == 0) return;
+    std::lock_guard lock(gStateLock);
+    if (gState.taps.scene.id == id) {
+        gState.tapped = VK_NULL_HANDLE;
+        gState.taps = Taps();
+        return;
+    }
+    forgetTap(gState.taps.depth, id);
+    forgetTap(gState.taps.jittered, id);
+    forgetTap(gState.taps.resolved, id);
+    forgetTap(gState.taps.velocity, id);
+    forgetTap(gState.taps.opaque, id);
+    forgetTap(gState.taps.lit, id);
+    for (int i = 0; i < gState.taps.shadowCount; i++) {
+        if (gState.taps.shadows[i].map.id == id) {
+            gState.taps.shadows[i] = gState.taps.shadows[--gState.taps.shadowCount];
+            i--;
+        }
+    }
+    for (int i = 0; i < gState.taps.gbufferCount; i++) {
+        if (gState.taps.gbuffer[i].id == id) {
+            gState.taps.gbuffer[i] = gState.taps.gbuffer[--gState.taps.gbufferCount];
+            i--;
+        }
+    }
+}
+
 const char* missName(Miss m) {
     switch (m) {
         case Miss::kNone: return "none";
@@ -5043,8 +5117,12 @@ bool Tappable(const Frame& frame, ImageId id, Tap* out) {
     const Image* i = imageOf(id);
     const auto handle = gHandles.find(id);
     // Level 0 is all a tap reads and all its barriers name, whatever mips the game keeps below.
+    const VkMemoryPropertyFlags unreadable =
+            VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT | VK_MEMORY_PROPERTY_PROTECTED_BIT;
     if (i == nullptr || handle == gHandles.end() || i->samples != VK_SAMPLE_COUNT_1_BIT ||
-        i->layers != 1 || !(i->usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+        i->layers != 1 || !(i->usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) ||
+        (i->usage & VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT) != 0 ||
+        (i->memory & unreadable) != 0) {
         return false;
     }
     const VkImageLayout layout = LastLayout(frame, id);
@@ -5060,8 +5138,12 @@ bool Sampleable(const Frame& frame, ImageId id, Tap* out, bool held = false) {
     static std::unordered_map<ImageId, VkImageLayout> lastSeen;
     const Image* i = imageOf(id);
     const auto handle = gHandles.find(id);
+    const VkMemoryPropertyFlags unreadable =
+            VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT | VK_MEMORY_PROPERTY_PROTECTED_BIT;
     if (i == nullptr || handle == gHandles.end() || i->samples != VK_SAMPLE_COUNT_1_BIT ||
-        i->layers != 1 || i->mips != 1 || !(i->usage & VK_IMAGE_USAGE_SAMPLED_BIT)) {
+        i->layers != 1 || i->mips != 1 || !(i->usage & VK_IMAGE_USAGE_SAMPLED_BIT) ||
+        (i->usage & VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT) != 0 ||
+        (i->memory & unreadable) != 0) {
         if (held) lastSeen.erase(id);
         return false;
     }

@@ -27,6 +27,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "kelir/cache.h"
@@ -466,8 +467,8 @@ struct Swapchain {
             lapis::ImageId id = 0;
             VkImageView view = VK_NULL_HANDLE;
             VkDescriptorSet set = VK_NULL_HANDLE;
+            uint64_t used = 0;
         } sources[kSources];
-        int nextSource = 0;
         // The scene images of late: one not among them is another screen, and the matte learnt
         // over the last is not its own.
         lapis::ImageId known[kScenesKnown] = {};
@@ -687,12 +688,26 @@ struct Device {
     VkShaderModule finishModule = VK_NULL_HANDLE;
     kelir::Lru<VkPipeline> finishes;  // by format and stage-B signature
     std::vector<VkPipeline> finishesRetired;  // evicted, maybe in flight: freed with the device
+
+    // Serializes swapchain recording/teardown against concurrent vkDestroyImage / vkFreeMemory.
+    std::mutex presentLock;
+    std::mutex tapLock;
+    std::unordered_set<uint32_t> activeTaps;
 };
 
 std::mutex gLock;
 // Windows whose game was asked for a new swapchain: the replacement gets a resume replay.
 std::set<ANativeWindow*> gRebuilding;
-std::unordered_map<VkDevice, std::unique_ptr<Device>> gDevices;
+std::unordered_map<VkDevice, std::shared_ptr<Device>> gDevices;
+std::atomic<uint32_t> gTapCount{0};
+
+void noteTap(Device& d, lapis::ImageId id) {
+    if (id == 0 || id == kUprightId || id == kDrawnId) return;
+    std::lock_guard lock(d.tapLock);
+    if (d.activeTaps.insert(id).second) {
+        gTapCount.fetch_add(1, std::memory_order_relaxed);
+    }
+}
 
 Device* deviceOf(VkDevice device) {
     std::lock_guard lock(gLock);
@@ -738,6 +753,8 @@ VkExtent2D appExtent(const Swapchain& sc) {
 
 // ---- Object helpers --------------------------------------------------------------------------
 
+void freeImage(Device& d, Image& image);
+
 bool makeImage(Device& d, Image* out, VkFormat format, uint32_t width, uint32_t height,
                VkImageUsageFlags usage, VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT) {
     VkImageCreateInfo info = {};
@@ -756,10 +773,13 @@ bool makeImage(Device& d, Image* out, VkFormat format, uint32_t width, uint32_t 
     VkMemoryRequirements req;
     d.vk.GetImageMemoryRequirements(d.device, out->image, &req);
     uint32_t type = UINT32_MAX;
+    const VkMemoryPropertyFlags disallowed =
+            VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT | VK_MEMORY_PROPERTY_PROTECTED_BIT;
     for (uint32_t i = 0; i < d.memory.memoryTypeCount; i++) {
-        if ((req.memoryTypeBits & (1u << i)) == 0) continue;
+        const VkMemoryPropertyFlags flags = d.memory.memoryTypes[i].propertyFlags;
+        if ((req.memoryTypeBits & (1u << i)) == 0 || (flags & disallowed) != 0) continue;
         if (type == UINT32_MAX) type = i;
-        if (d.memory.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
+        if (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
             type = i;
             break;
         }
@@ -771,6 +791,7 @@ bool makeImage(Device& d, Image* out, VkFormat format, uint32_t width, uint32_t 
     if (type == UINT32_MAX ||
         d.vk.AllocateMemory(d.device, &alloc, nullptr, &out->memory) != VK_SUCCESS ||
         d.vk.BindImageMemory(d.device, out->image, out->memory, 0) != VK_SUCCESS) {
+        freeImage(d, *out);
         return false;
     }
     VkImageViewCreateInfo view = {};
@@ -779,7 +800,11 @@ bool makeImage(Device& d, Image* out, VkFormat format, uint32_t width, uint32_t 
     view.viewType = VK_IMAGE_VIEW_TYPE_2D;
     view.format = format;
     view.subresourceRange = {aspect, 0, 1, 0, 1};
-    return d.vk.CreateImageView(d.device, &view, nullptr, &out->view) == VK_SUCCESS;
+    if (d.vk.CreateImageView(d.device, &view, nullptr, &out->view) != VK_SUCCESS) {
+        freeImage(d, *out);
+        return false;
+    }
+    return true;
 }
 
 void freeImage(Device& d, Image& image) {
@@ -870,11 +895,13 @@ VkRenderPass makeRenderPass(Device& d, std::initializer_list<VkFormat> formats,
     subpass.colorAttachmentCount = count;
     subpass.pColorAttachments = refs;
     VkSubpassDependency deps[2] = {};
-    // In: earlier reads of this image, and the acquire semaphore's wait for a swapchain image.
+    // In: earlier reads/writes of this image, and the acquire semaphore's wait for a swapchain image.
     deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     deps[0].dstSubpass = 0;
     deps[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+            VK_PIPELINE_STAGE_TRANSFER_BIT;
+    deps[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
     deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     // Out: the next pyramid level, the motion search and the output pass read it.
@@ -1566,13 +1593,26 @@ void freeUpright(Device& d, Swapchain& sc) {
 }
 
 void waitFrames(Device& d, Swapchain& sc) {
+    bool timedOut = false;
     for (Frame& f : sc.frames) {
         if (!f.pending) continue;
-        d.vk.WaitForFences(d.device, 1, &f.fence, VK_TRUE, kFenceTimeoutNs);
+        if (d.vk.WaitForFences(d.device, 1, &f.fence, VK_TRUE, kFenceTimeoutNs) != VK_SUCCESS) {
+            timedOut = true;
+        }
         d.vk.ResetFences(d.device, 1, &f.fence);
         f.pending = false;
         harvest(d, sc, f);
     }
+    for (int j = 0; j < kAfmeSlots; j++) {
+        if (!sc.afme.pending[j] || sc.afme.done[j] == VK_NULL_HANDLE) continue;
+        if (d.vk.WaitForFences(d.device, 1, &sc.afme.done[j], VK_TRUE, kFenceTimeoutNs) !=
+            VK_SUCCESS) {
+            timedOut = true;
+        }
+        d.vk.ResetFences(d.device, 1, &sc.afme.done[j]);
+        sc.afme.pending[j] = false;
+    }
+    if (timedOut) d.vk.DeviceWaitIdle(d.device);
 }
 
 void freeBand(Device& d, Swapchain& sc) {
@@ -2375,17 +2415,29 @@ bool usable(const Config& config, const lapis::Taps& taps) {
     return config.lapis.hideHud || (!taps.held && !taps.gameGenerates);
 }
 
-// A sampled view of the game's scene image, with its upscale set; null when none can be made.
+// A sampled view of the game's scene image, with its upscale set; null when none can be made, or
+// every view kept is still read by a frame in flight.
 auto* sourceFor(Device& d, Swapchain& sc, const lapis::Tap& scene) {
+    auto* oldest = &sc.afme.sources[0];
     for (auto& source : sc.afme.sources) {
-        if (source.id == scene.id && source.view != VK_NULL_HANDLE) return &source;
+        if (source.id == scene.id && source.view != VK_NULL_HANDLE) {
+            source.used = sc.realFrames;
+            noteTap(d, scene.id);
+            return &source;
+        }
+        if (source.view == VK_NULL_HANDLE ||
+            (oldest->view != VK_NULL_HANDLE && source.used < oldest->used)) {
+            oldest = &source;
+        }
     }
-    // The oldest view's frames left the GPU long ago: a scene image changes on resize at most.
-    auto& source = sc.afme.sources[sc.afme.nextSource];
+    auto& source = *oldest;
     decltype(&source) none = nullptr;
     if (source.set == VK_NULL_HANDLE) return none;
-    if (source.view != VK_NULL_HANDLE) d.vk.DestroyImageView(d.device, source.view, nullptr);
-    source = {0, VK_NULL_HANDLE, source.set};
+    if (source.view != VK_NULL_HANDLE) {
+        if (source.used + kFrames >= sc.realFrames) return none;
+        d.vk.DestroyImageView(d.device, source.view, nullptr);
+    }
+    source = {0, VK_NULL_HANDLE, source.set, 0};
     VkImageViewCreateInfo info = {};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     info.image = scene.image;
@@ -2397,6 +2449,8 @@ auto* sourceFor(Device& d, Swapchain& sc, const lapis::Tap& scene) {
         return none;
     }
     source.id = scene.id;
+    source.used = sc.realFrames;
+    noteTap(d, scene.id);
     const VkDescriptorImageInfo image = {d.linear, source.view,
                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet write = {};
@@ -2406,7 +2460,6 @@ auto* sourceFor(Device& d, Swapchain& sc, const lapis::Tap& scene) {
     write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     write.pImageInfo = &image;
     d.vk.UpdateDescriptorSets(d.device, 1, &write, 0, nullptr);
-    sc.afme.nextSource = (sc.afme.nextSource + 1) % kSources;
     return &source;
 }
 
@@ -2732,6 +2785,7 @@ VkImageView viewFor(Device& d, Swapchain& sc, View* views, const lapis::Tap& tap
         auto& v = views[i];
         if (v.id == tap.id && v.view != VK_NULL_HANDLE) {
             v.used = sc.realFrames;
+            noteTap(d, tap.id);
             return v.view;
         }
         if (v.used < oldest->used) oldest = &v;
@@ -2753,6 +2807,7 @@ VkImageView viewFor(Device& d, Swapchain& sc, View* views, const lapis::Tap& tap
     }
     oldest->id = tap.id;
     oldest->used = sc.realFrames;
+    noteTap(d, tap.id);
     return oldest->view;
 }
 
@@ -2763,6 +2818,7 @@ VkImageView depthViewFor(Device& d, Swapchain& sc, const lapis::Tap& depth) {
     for (auto& v : sc.band.depths) {
         if (v.id == depth.id && v.view != VK_NULL_HANDLE) {
             v.used = sc.realFrames;
+            noteTap(d, depth.id);
             return v.view;
         }
         if (v.used < oldest->used) oldest = &v;
@@ -2784,6 +2840,7 @@ VkImageView depthViewFor(Device& d, Swapchain& sc, const lapis::Tap& depth) {
     }
     oldest->id = depth.id;
     oldest->used = sc.realFrames;
+    noteTap(d, depth.id);
     return oldest->view;
 }
 
@@ -2830,22 +2887,27 @@ VkDescriptorSet recordBand(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& 
             : VK_NULL_HANDLE;
     if (depthView != VK_NULL_HANDLE) {
         const VkImageLayout ro = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        const bool inPlace = readOnlyDepth(depth.layout);
         const VkImageAspectFlags aspects = depthAspects(depth.format);
-        writeImages(d, b.depthSets[slot], {{depthView, ro, d.nearest}});
-        if (depth.layout != ro) {
+        writeImages(d, b.depthSets[slot], {{depthView, inPlace ? depth.layout : ro, d.nearest}});
+        if (inPlace) {
+            memoryBarrier(vk, cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
+                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        } else {
             imageBarrier(vk, cb, depth.image, depth.layout, ro, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                         0, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
-                         aspects);
+                         VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_ACCESS_SHADER_READ_BIT, aspects);
         }
         const float params[16] = {static_cast<float>(w), static_cast<float>(h), taps.camera.c,
                                   taps.camera.b, taps.camera.gl ? 1.0f : 0.0f,
                                   taps.turned ? 1.0f : 0.0f};
         fullscreen(vk, cb, d.distancePass, b.linFb, w, h, d.depth, d.upscalePipe,
                    b.depthSets[slot], params);
-        if (depth.layout != ro) {
+        if (!inPlace) {
             imageBarrier(vk, cb, depth.image, ro, depth.layout,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, aspects);
+                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, aspects);
         }
         b.distance = true;
         stamp("depth");
@@ -2860,8 +2922,9 @@ VkDescriptorSet recordBand(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& 
     const bool dof = band[16] > 0.0f;
     const bool gi = band[22] > 0.0f;
     if (s.layout != read) {
-        imageBarrier(vk, cb, s.image, s.layout, read, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        imageBarrier(vk, cb, s.image, s.layout, read, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                     VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                     VK_ACCESS_SHADER_READ_BIT);
     }
     if (gi) {
         // Bounced light, carried along the game's velocity when it is one Luwes reads.
@@ -2871,8 +2934,9 @@ VkDescriptorSet recordBand(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& 
                 ? temporalViewFor(d, sc, v)
                 : VK_NULL_HANDLE;
         if (velocity != VK_NULL_HANDLE && v.layout != read) {
-            imageBarrier(vk, cb, v.image, v.layout, read, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+            imageBarrier(vk, cb, v.image, v.layout, read, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_ACCESS_SHADER_READ_BIT);
         }
         const int next = 1 - b.bouncedCur;
         writeImages(d, b.bouncedSets[slot],
@@ -2890,7 +2954,8 @@ VkDescriptorSet recordBand(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& 
                    std::max(h / 4, 1u), d.gi, d.giPipe, b.bouncedSets[slot], params);
         if (velocity != VK_NULL_HANDLE && v.layout != read) {
             imageBarrier(vk, cb, v.image, read, v.layout, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0);
+                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
         }
         b.bouncedCur = next;
     }
@@ -3311,7 +3376,8 @@ VkDescriptorSet recordBand(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& 
     }
     if (s.layout != read) {
         imageBarrier(vk, cb, s.image, read, s.layout, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0);
+                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                     VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
     }
     stamp("band");
     return b.resample;
@@ -3376,6 +3442,7 @@ VkImageView temporalViewFor(Device& d, Swapchain& sc, const lapis::Tap& tap) {
     for (auto& v : sc.temporal.views) {
         if (v.id == tap.id && v.view != VK_NULL_HANDLE) {
             v.used = sc.realFrames;
+            noteTap(d, tap.id);
             return v.view;
         }
         if (v.used < oldest->used) oldest = &v;
@@ -3397,6 +3464,7 @@ VkImageView temporalViewFor(Device& d, Swapchain& sc, const lapis::Tap& tap) {
     }
     oldest->id = tap.id;
     oldest->used = sc.realFrames;
+    noteTap(d, tap.id);
     return oldest->view;
 }
 
@@ -3407,16 +3475,22 @@ bool temporalReady(const lapis::Taps& taps, VkExtent2D extent) {
             taps.velocity.image != VK_NULL_HANDLE &&
             taps.velocity.format == VK_FORMAT_A2R10G10B10_UNORM_PACK32 &&
             taps.depth.image != VK_NULL_HANDLE &&
+            (taps.jittered.usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0 &&
+            (taps.resolved.usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0 &&
+            (taps.velocity.usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0 &&
             (taps.depth.usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0 && taps.camera.matrices &&
+            taps.jittered.width > 0 && taps.jittered.height > 0 &&
             taps.jittered.width == taps.depth.width && taps.jittered.height == taps.depth.height &&
-            Smaller(taps.jittered, extent);
+            taps.velocity.width == taps.jittered.width &&
+            taps.velocity.height == taps.jittered.height && Smaller(taps.jittered, extent);
 }
 
 // SGSR 2 on the game's jittered scene into the accumulation, and with its detail carried onto
 // `base` (the game's scene, or Kelir's band over it) into sharp[target], 2 for sharpRaw. False
 // when it could not be recorded; nothing was then.
 bool recordTemporal(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& frame,
-                    const lapis::Taps& taps, VkImageView base, int target) {
+                    const lapis::Taps& taps, VkImageView base, int target,
+                    VkImage sceneInRead = VK_NULL_HANDLE) {
     const lapis::Tap& color = taps.jittered;
     if (!prepareTemporal(d, sc, color.width, color.height)) return false;
     auto& t = sc.temporal;
@@ -3433,6 +3507,7 @@ bool recordTemporal(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& frame,
     const int slot = static_cast<int>(&frame - sc.frames);
     const VkImageLayout read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     const VkImageLayout depthRead = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    const bool depthInPlace = readOnlyDepth(taps.depth.layout);
     if (!t.primed) {
         const VkImageLayout dst = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         const VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -3449,28 +3524,52 @@ bool recordTemporal(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& frame,
         t.primed = true;
         t.valid = false;
     }
-    // The game's images into readable layouts for the two passes, and back after.
+    // The game's images into readable layouts for the two passes, and back after. Depth left in a
+    // read-only depth layout (e.g. DEPTH_READ_ONLY_STENCIL_ATTACHMENT) is sampled in place so its
+    // stencil aspect is never touched.
     struct Held {
         const lapis::Tap* tap;
         VkImageLayout want;
         VkImageAspectFlags aspects;
+        bool inPlace;
     };
-    const Held held[] = {{&color, read, VK_IMAGE_ASPECT_COLOR_BIT},
-                         {&taps.resolved, read, VK_IMAGE_ASPECT_COLOR_BIT},
-                         {&taps.velocity, read, VK_IMAGE_ASPECT_COLOR_BIT},
-                         {&taps.depth, depthRead, depthAspects(taps.depth.format)}};
-    for (const Held& h : held) {
-        if (h.tap->layout == h.want) continue;
+    const Held held[] = {{&color, read, VK_IMAGE_ASPECT_COLOR_BIT, false},
+                         {&taps.resolved, read, VK_IMAGE_ASPECT_COLOR_BIT, false},
+                         {&taps.velocity, read, VK_IMAGE_ASPECT_COLOR_BIT, false},
+                         {&taps.depth, depthRead, depthAspects(taps.depth.format), depthInPlace}};
+    bool moved[std::size(held)] = {};
+    bool needReadBarrier = false;
+    for (size_t i = 0; i < std::size(held); i++) {
+        const Held& h = held[i];
+        if (h.inPlace || h.tap->layout == h.want) {
+            needReadBarrier = true;
+            continue;
+        }
+        if (h.want == read && h.tap->image == sceneInRead) continue;
+        bool duplicate = false;
+        for (size_t j = 0; j < i; j++) {
+            if (moved[j] && held[j].tap->image == h.tap->image) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) continue;
         imageBarrier(vk, cb, h.tap->image, h.tap->layout, h.want, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                     0, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
-                     h.aspects);
+                     VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                     VK_ACCESS_SHADER_READ_BIT, h.aspects);
+        moved[i] = true;
+    }
+    if (needReadBarrier) {
+        memoryBarrier(vk, cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
+                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
     }
     const auto W = static_cast<float>(color.width);
     const auto H = static_cast<float>(color.height);
     const lapis::Camera& camera = taps.camera;
     const float tanHalfFovH = camera.known && camera.sx != 0.0f ? 1.0f / std::fabs(camera.sx) : 1.0f;
     writeImages(d, t.convertSets[slot],
-                {{depthView, depthRead, d.nearest}, {velocityView, read, d.nearest}});
+                {{depthView, depthInPlace ? taps.depth.layout : depthRead, d.nearest},
+                 {velocityView, read, d.nearest}});
     const float convert[16] = {W,           H, 1.0f / W, 1.0f / H, tanHalfFovH,
                                taps.reversed ? 1.0f : 0.0f, 0.0f, 0.0f, kPackedVelocityZero};
     fullscreen(vk, cb, d.motionPass, t.motionFb, color.width, color.height, d.temporal,
@@ -3483,8 +3582,8 @@ bool recordTemporal(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& frame,
         still[c] -= camera.ndcJitterX * camera.vp[12 + c];
         still[4 + c] -= camera.ndcJitterY * camera.vp[12 + c];
     }
-    float moved = 0.0f;
-    for (int i = 0; i < 16; i++) moved += std::fabs(still[i] - t.lastVp[i]);
+    float movedVp = 0.0f;
+    for (int i = 0; i < 16; i++) movedVp += std::fabs(still[i] - t.lastVp[i]);
     std::copy(std::begin(still), std::end(still), t.lastVp);
     const auto ow = static_cast<float>(sc.extent.width);
     const auto oh = static_cast<float>(sc.extent.height);
@@ -3505,17 +3604,18 @@ bool recordTemporal(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& frame,
             (sc.afme.orientation & 1) ? 1.0f : 0.0f,
             ow / W,
             std::min(20.0f, std::pow(ow * oh / (W * H), 3.0f)),
-            moved < 1e-5f ? kMinLerp : 0.0f,
+            movedVp < 1e-5f ? kMinLerp : 0.0f,
             t.valid ? 0.0f : 1.0f,
             kDetailGamma, kDetailMax, kSampleWeight,
     };
     fullscreen(vk, cb, up->pass, t.upFb[next][target], sc.extent.width, sc.extent.height,
                up->pipeline, d.temporalUpPipe, t.upSets[slot], params, sizeof(params));
-    for (const Held& h : held) {
-        if (h.tap->layout == h.want) continue;
+    for (size_t i = 0; i < std::size(held); i++) {
+        if (!moved[i]) continue;
+        const Held& h = held[i];
         imageBarrier(vk, cb, h.tap->image, h.want, h.tap->layout,
                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                     0, h.aspects);
+                     VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, h.aspects);
     }
     t.cur = next;
     t.valid = true;
@@ -3546,8 +3646,9 @@ bool recordSharp(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& frame,
     const VkImageLayout read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     const bool game = band == VK_NULL_HANDLE && scene.layout != read;
     if (game) {
-        imageBarrier(vk, cb, scene.image, scene.layout, read, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        imageBarrier(vk, cb, scene.image, scene.layout, read, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                     VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                     VK_ACCESS_SHADER_READ_BIT);
     }
     const bool graded = stage != nullptr && stage->stageA != VK_NULL_HANDLE;
     const float params[16] = {
@@ -3565,7 +3666,8 @@ bool recordSharp(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& frame,
     // SGSR 2 where the game's own anti-aliasing shows its jittered scene; SGSR 1 otherwise.
     const VkImageView base = band != VK_NULL_HANDLE ? sc.band.fx[0].view : source->view;
     sc.afme.method[cur] = temporal != nullptr &&
-                    recordTemporal(d, sc, cb, frame, *temporal, base, graded ? 2 : cur)
+                    recordTemporal(d, sc, cb, frame, *temporal, base, graded ? 2 : cur,
+                                   game ? scene.image : VK_NULL_HANDLE)
             ? 2
             : sgsr ? 1 : 0;
     if (sc.afme.method[cur] != 2) {
@@ -3574,7 +3676,8 @@ bool recordSharp(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& frame,
     }
     if (game) {
         imageBarrier(vk, cb, scene.image, read, scene.layout, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                     0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0);
+                     0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                     VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
     }
     stamp(sc.afme.method[cur] == 2 ? "sgsr2" : sgsr ? "upscale" : "resample");
     if (!graded) return true;
@@ -3606,11 +3709,12 @@ bool recordHud(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& frame, uint3
                  {source->view, read, d.linear},
                  {sc.afme.matte[1 - cur].view, read, d.nearest}});
     imageBarrier(vk, cb, app, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, read,
-                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                 VK_ACCESS_SHADER_READ_BIT);
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
+                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
     if (scene.layout != read) {
-        imageBarrier(vk, cb, scene.image, scene.layout, read, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        imageBarrier(vk, cb, scene.image, scene.layout, read, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                     VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                     VK_ACCESS_SHADER_READ_BIT);
     }
     const bool known = std::find(std::begin(sc.afme.known), std::end(sc.afme.known), scene.id) !=
             std::end(sc.afme.known);
@@ -3639,7 +3743,8 @@ bool recordHud(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& frame, uint3
                d.hudPipe, set, params);
     if (scene.layout != read) {
         imageBarrier(vk, cb, scene.image, read, scene.layout, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                     0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0);
+                     0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                     VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
     }
     imageBarrier(vk, cb, app, read, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0);
@@ -3700,15 +3805,17 @@ bool recordUpright(Device& d, Swapchain& sc, VkCommandBuffer cb, const lapis::Ta
     const Fns& vk = d.vk;
     const VkImageLayout read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     if (scene.layout != read) {
-        imageBarrier(vk, cb, scene.image, scene.layout, read, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        imageBarrier(vk, cb, scene.image, scene.layout, read, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                     VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                     VK_ACCESS_SHADER_READ_BIT);
     }
     const float params[16] = {static_cast<float>(size.width), static_cast<float>(size.height)};
     fullscreen(vk, cb, pass->pass, sc.afme.uprightFb, size.width, size.height, pass->pipeline,
                d.upscalePipe, source->set, params);
     if (scene.layout != read) {
         imageBarrier(vk, cb, scene.image, read, scene.layout, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                     0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0);
+                     0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                     VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
     }
     *out = {sc.afme.upright.image, scene.format, size.width, size.height, read,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, kUprightId};
@@ -3747,11 +3854,13 @@ bool recordDrawn(Device& d, Swapchain& sc, VkCommandBuffer cb, const lapis::Tap&
         a.drawnSize = {scene.width, scene.height};
     }
     const Fns& vk = d.vk;
+    noteTap(d, scene.id);
     const VkImageLayout src = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     const VkImageLayout dst = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     const VkImageLayout read = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imageBarrier(vk, cb, scene.image, scene.layout, src, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+    imageBarrier(vk, cb, scene.image, scene.layout, src, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                 VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                 VK_ACCESS_TRANSFER_READ_BIT);
     // Its last contents are not needed: all of it is drawn over.
     imageBarrier(vk, cb, a.drawn.image, VK_IMAGE_LAYOUT_UNDEFINED, dst,
                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -3769,7 +3878,8 @@ bool recordDrawn(Device& d, Swapchain& sc, VkCommandBuffer cb, const lapis::Tap&
                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT);
     imageBarrier(vk, cb, scene.image, src, scene.layout, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0);
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
     *out = scene;
     out->image = a.drawn.image;
     out->layout = read;
@@ -3803,13 +3913,15 @@ void reportLayer(const Swapchain& sc, const lapis::Taps& taps, bool wanted, bool
 // Thumbnails of the real frame and of the game's scene as stored, for decideOrientation.
 void recordProbe(const Fns& vk, VkCommandBuffer cb, Swapchain& sc, VkImage app,
                  const lapis::Tap& scene) {
+    noteTap(*sc.device, scene.id);
     const VkImageLayout src = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     const VkImageLayout dst = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     imageBarrier(vk, cb, app, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, src,
-                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                 VK_ACCESS_TRANSFER_READ_BIT);
-    imageBarrier(vk, cb, scene.image, scene.layout, src, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+    imageBarrier(vk, cb, scene.image, scene.layout, src, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                 VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                 VK_ACCESS_TRANSFER_READ_BIT);
     for (const Image& t : sc.afme.thumb) {
         imageBarrier(vk, cb, t.image, VK_IMAGE_LAYOUT_UNDEFINED, dst,
                      VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -3834,7 +3946,8 @@ void recordProbe(const Fns& vk, VkCommandBuffer cb, Swapchain& sc, VkImage app,
     imageBarrier(vk, cb, app, src, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                  VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0);
     imageBarrier(vk, cb, scene.image, src, scene.layout, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0);
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
     for (int j = 0; j < 2; j++) {
         imageBarrier(vk, cb, sc.afme.thumb[j].image, dst, src, VK_PIPELINE_STAGE_TRANSFER_BIT,
                      VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -3887,13 +4000,15 @@ void recordGBufferCapture(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& f
         if (tap.image == VK_NULL_HANDLE || (tap.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0) {
             return;
         }
+        noteTap(d, tap.id);
         const VkImageLayout src = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         imageBarrier(vk, cb, tap.image, tap.layout, src, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                      VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                      VK_ACCESS_TRANSFER_READ_BIT, all);
         readback(d, sc, frame, cb, tap.image, src, tap.format, tap.width, tap.height, tag, aspect);
         imageBarrier(vk, cb, tap.image, src, tap.layout, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, all);
+                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                     VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, all);
     };
     dump(taps.depth, VK_IMAGE_ASPECT_DEPTH_BIT, depthAspects(taps.depth.format), "depth");
     dump(taps.velocity, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_COLOR_BIT, "velocity");
@@ -3924,6 +4039,7 @@ void recordAfmeDepth(Device& d, Swapchain& sc, VkCommandBuffer cb, const lapis::
         return;
     }
     const Fns& vk = d.vk;
+    noteTap(d, depth.id);
     const VkImageAspectFlags ds = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
     const VkImageLayout ro = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     const VkImageLayout src = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -3952,7 +4068,8 @@ void recordAfmeDepth(Device& d, Swapchain& sc, VkCommandBuffer cb, const lapis::
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                  VK_ACCESS_SHADER_READ_BIT, ds);
     imageBarrier(vk, cb, depth.image, src, depth.layout, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, ds);
+                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                 VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, ds);
     sc.afme.depthFed[sc.current] = true;
 }
 
@@ -4010,8 +4127,9 @@ bool recordVelocityHint(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& fra
     const VkDescriptorSet set = sc.velocity.sets[&frame - sc.frames];
     writeImages(d, set, {{view, read, d.nearest}, {view, read, d.nearest}});
     if (v.layout != read) {
-        imageBarrier(vk, cb, v.image, v.layout, read, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        imageBarrier(vk, cb, v.image, v.layout, read, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                     VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                     VK_ACCESS_SHADER_READ_BIT);
     }
     const uint32_t gw = levelWidth(sc, kFinest) / 8;
     const uint32_t gh = levelHeight(sc, kFinest) / 8;
@@ -4021,7 +4139,8 @@ bool recordVelocityHint(Device& d, Swapchain& sc, VkCommandBuffer cb, Frame& fra
     fullscreen(vk, cb, d.motionPass, sc.velocity.fb, gw, gh, d.hint, d.temporalPipe, set, params);
     if (v.layout != read) {
         imageBarrier(vk, cb, v.image, read, v.layout, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0);
+                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                     VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
     }
     memoryBarrier(vk, cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -4574,21 +4693,24 @@ void recordAnalysis(Device& d, Swapchain& sc, VkCommandBuffer cb, uint32_t appIn
         const VkImageView depthView = dt != nullptr ? depthViewFor(d, sc, *dt) : VK_NULL_HANDLE;
         if (depthView == VK_NULL_HANDLE) dt = nullptr;
         const VkImageLayout depthRead = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        const bool dtInPlace = dt != nullptr && readOnlyDepth(dt->layout);
         const VkDescriptorSet set = gv.denseSets[&frame - sc.frames];
         const Binding fieldIn = {sc.field[kFinest][0].view, VK_IMAGE_LAYOUT_GENERAL, d.linear};
         writeImages(d, set,
                     {dense ? Binding{gv.lastView, read, d.linear} : fieldIn, fieldIn,
                      Binding{sc.luma[cur][0].view, read, d.linear},
                      Binding{sc.luma[1 - cur][0].view, read, d.linear},
-                     dt != nullptr ? Binding{depthView, depthRead, d.nearest} : fieldIn});
+                     dt != nullptr ? Binding{depthView, dtInPlace ? dt->layout : depthRead, d.nearest}
+                                   : fieldIn});
         if (vt != nullptr && vt->layout != read) {
-            imageBarrier(vk, cb, vt->image, vt->layout, read, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+            imageBarrier(vk, cb, vt->image, vt->layout, read, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_ACCESS_SHADER_READ_BIT);
         }
-        if (dt != nullptr && dt->layout != depthRead) {
+        if (dt != nullptr && !dtInPlace) {
             imageBarrier(vk, cb, dt->image, dt->layout, depthRead, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                         0, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
-                         depthAspects(dt->format));
+                         VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_ACCESS_SHADER_READ_BIT, depthAspects(dt->format));
         }
         const uint32_t lw = levelWidth(sc, 0);
         const uint32_t lh = levelHeight(sc, 0);
@@ -4607,11 +4729,14 @@ void recordAnalysis(Device& d, Swapchain& sc, VkCommandBuffer cb, uint32_t appIn
         fullscreen(vk, cb, d.motionPass, gv.denseFb, lw, lh, d.dense, d.densePipe, set, params);
         if (vt != nullptr && vt->layout != read) {
             imageBarrier(vk, cb, vt->image, read, vt->layout, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                         0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0);
+                         0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
         }
-        if (dt != nullptr && dt->layout != depthRead) {
+        if (dt != nullptr && !dtInPlace) {
             imageBarrier(vk, cb, dt->image, depthRead, dt->layout, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                         0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, depthAspects(dt->format));
+                         0, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+                         depthAspects(dt->format));
         }
     }
     if (timed) vk.CmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, sc.timer, base + 3);
@@ -4758,6 +4883,16 @@ void recordOutput(Device& d, Swapchain& sc, const Output& out, VkCommandBuffer c
                   const Frame& f, VkPipeline finish) {
     const Fns& vk = d.vk;
     begin(vk, cb);
+    // Orders f.analysis (and any earlier output on this queue) before fragment/compute/AFME reads.
+    memoryBarrier(vk, cb,
+                  VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT |
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT |
+                          VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
     // With AFME the pass reproduces AFME's frame; otherwise it warps the held pair itself.
     const bool viaAfme = generated && sc.afme.active;
     if (viaAfme) recordAfme(d, sc, cb, mode, t);
@@ -5007,7 +5142,7 @@ VkResult createDevice(const framefx_vk_instance* in, VkPhysicalDevice physical,
     }
     if (result != VK_SUCCESS) return result;
 
-    auto d = std::make_unique<Device>();
+    auto d = std::make_shared<Device>();
     d->device = *device;
     d->physical = physical;
     d->instance = *in;
@@ -5049,13 +5184,22 @@ VkResult createDevice(const framefx_vk_instance* in, VkPhysicalDevice physical,
 }
 
 void destroyDevice(VkDevice device) {
-    std::unique_ptr<Device> d;
+    std::shared_ptr<Device> d;
     {
         std::lock_guard lock(gLock);
         const auto it = gDevices.find(device);
         if (it == gDevices.end()) return;
         d = std::move(it->second);
         gDevices.erase(it);
+    }
+    std::lock_guard presentGuard(d->presentLock);
+    {
+        std::lock_guard tapGuard(d->tapLock);
+        if (!d->activeTaps.empty()) {
+            gTapCount.fetch_sub(static_cast<uint32_t>(d->activeTaps.size()),
+                                std::memory_order_relaxed);
+            d->activeTaps.clear();
+        }
     }
     if (!d->usable) return;
     d->vk.DeviceWaitIdle(device);
@@ -5144,10 +5288,13 @@ bool makeGameImages(Device& d, Swapchain& sc, const VkSwapchainCreateInfoKHR* in
         VkMemoryRequirements req = {};
         if (ok) d.vk.GetImageMemoryRequirements(d.device, made.image, &req);
         uint32_t type = UINT32_MAX;
+        const VkMemoryPropertyFlags disallowed =
+                VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT | VK_MEMORY_PROPERTY_PROTECTED_BIT;
         for (uint32_t t = 0; ok && t < d.memory.memoryTypeCount; t++) {
-            if ((req.memoryTypeBits & (1u << t)) == 0) continue;
+            const VkMemoryPropertyFlags flags = d.memory.memoryTypes[t].propertyFlags;
+            if ((req.memoryTypeBits & (1u << t)) == 0 || (flags & disallowed) != 0) continue;
             if (type == UINT32_MAX) type = t;
-            if (d.memory.memoryTypes[t].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
+            if (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
                 type = t;
                 break;
             }
@@ -5519,23 +5666,27 @@ VkResult createSwapchain(VkDevice device, const VkSwapchainCreateInfoKHR* info,
 
 void destroySwapchain(VkDevice device, VkSwapchainKHR swapchain,
                       const VkAllocationCallbacks* allocator) {
-    std::unique_ptr<Swapchain> sc;
-    Device* d = nullptr;
+    std::shared_ptr<Device> d;
     {
         std::lock_guard lock(gLock);
         const auto it = gDevices.find(device);
-        if (it != gDevices.end()) {
-            d = it->second.get();
+        if (it != gDevices.end()) d = it->second;
+    }
+    if (d != nullptr) {
+        std::lock_guard presentGuard(d->presentLock);
+        std::unique_ptr<Swapchain> sc;
+        {
+            std::lock_guard lock(gLock);
             const auto s = d->swapchains.find(swapchain);
             if (s != d->swapchains.end()) {
                 sc = std::move(s->second);
                 d->swapchains.erase(s);
             }
         }
-    }
-    if (sc != nullptr && d->usable) {
-        freeAll(*d, *sc);
-        freeGame(*d, *sc);
+        if (sc != nullptr && d->usable) {
+            freeAll(*d, *sc);
+            freeGame(*d, *sc);
+        }
     }
     gHost.destroy_swapchain(device, swapchain, allocator);
 }
@@ -5554,6 +5705,7 @@ VkResult queuePresent(VkQueue queue, const VkPresentInfoKHR* info) {
     if (found == nullptr) return pass(queue, info);
     Swapchain& sc = *found;
     Device& d = *sc.device;
+    std::unique_lock<std::mutex> presentGuard(d.presentLock);
     // The image the game drew (`appIndex`) and the swapchain image shown (`outIndex`): one and the
     // same unless the game draws at another size, into images of its own.
     const bool resized = sc.resized();
@@ -5814,6 +5966,8 @@ VkResult queuePresent(VkQueue queue, const VkPresentInfoKHR* info) {
     int generated = 0;
     bool generating = true;
     const VkPipelineStageFlags drawStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    const VkPipelineStageFlags copiedStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     for (int i = 0; i < count; i++) {
         const Present& p = order[i];
         if (p.own) {
@@ -5829,7 +5983,7 @@ VkResult queuePresent(VkQueue queue, const VkPresentInfoKHR* info) {
                 recordOutput(d, sc, *out, f.outputs[i], outIndex, luwes.mode,
                              p.generated && !cut ? p.phase : realPhase, p.generated,
                              p.generated ? capture : nullptr, generated, f, finish);
-                const bool submitted = submit(d.vk, queue, f.outputs[i], 1, &copied, &drawStage,
+                const bool submitted = submit(d.vk, queue, f.outputs[i], 1, &copied, &copiedStage,
                                               sc.drawn[outIndex]) == VK_SUCCESS;
                 fenceAfme(d, sc, queue, submitted);
                 if (submitted) {
@@ -5897,6 +6051,7 @@ VkResult queuePresent(VkQueue queue, const VkPresentInfoKHR* info) {
     reportUpscale(sc, config, reads ? &taps : nullptr,
                   sc.afme.hasSharp[sc.current] ? sc.afme.method[sc.current] : 0, now);
     sc.current = 1 - sc.current;
+    presentGuard.unlock();
 
     if (!solo) {
         const int64_t wake = pacer.limit(Now());
@@ -5963,6 +6118,61 @@ bool gameImages(VkDevice device, VkSwapchainKHR swapchain, std::vector<VkImage>*
     for (const Image& i : sc->game.images) images->push_back(i.image);
     *shown = sc->extent;
     return true;
+}
+
+void releaseImage(VkDevice device, uint32_t imageId, VkImage image) {
+    if (imageId == 0 || gTapCount.load(std::memory_order_relaxed) == 0) return;
+    std::shared_ptr<Device> d;
+    {
+        std::lock_guard lock(gLock);
+        const auto it = gDevices.find(device);
+        if (it == gDevices.end() || !it->second->usable) return;
+        d = it->second;
+    }
+    {
+        std::lock_guard tapGuard(d->tapLock);
+        if (d->activeTaps.find(imageId) == d->activeTaps.end()) return;
+    }
+    std::lock_guard presentGuard(d->presentLock);
+    std::vector<Swapchain*> swapchains;
+    {
+        std::lock_guard lock(gLock);
+        swapchains.reserve(d->swapchains.size());
+        for (auto& [handle, sc] : d->swapchains) swapchains.push_back(sc.get());
+    }
+    for (Swapchain* sc : swapchains) {
+        waitFrames(*d, *sc);
+        for (auto& source : sc->afme.sources) {
+            if (source.id != imageId) continue;
+            if (source.view != VK_NULL_HANDLE) d->vk.DestroyImageView(d->device, source.view, nullptr);
+            source.view = VK_NULL_HANDLE;
+            source.id = 0;
+            source.used = 0;
+        }
+        for (auto& v : sc->temporal.views) {
+            if (v.id != imageId) continue;
+            if (v.view != VK_NULL_HANDLE) d->vk.DestroyImageView(d->device, v.view, nullptr);
+            v = {};
+            sc->temporal.valid = false;
+        }
+        for (auto& v : sc->band.depths) {
+            if (v.id != imageId) continue;
+            if (v.view != VK_NULL_HANDLE) d->vk.DestroyImageView(d->device, v.view, nullptr);
+            v = {};
+        }
+        for (auto& v : sc->band.gbufferViews) {
+            if (v.id != imageId) continue;
+            if (v.view != VK_NULL_HANDLE) d->vk.DestroyImageView(d->device, v.view, nullptr);
+            v = {};
+        }
+        if (image != VK_NULL_HANDLE && sc->afme.probed == image) sc->afme.probed = VK_NULL_HANDLE;
+        if (sc->afme.upscaled == imageId) sc->afme.upscaled = 0;
+        if (sc->temporal.logged == imageId) sc->temporal.logged = 0;
+    }
+    std::lock_guard tapGuard(d->tapLock);
+    if (d->activeTaps.erase(imageId) > 0) {
+        gTapCount.fetch_sub(1, std::memory_order_relaxed);
+    }
 }
 
 }  // namespace framefx::luwes::vulkan
